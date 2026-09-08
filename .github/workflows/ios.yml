@@ -16,7 +16,7 @@ on:
 jobs:
   build-ios:
     name: Build AlnPlay IPA (${{ inputs.build_mode }})
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     env:
       BUILD_MODE: ${{ inputs.build_mode }}
@@ -33,6 +33,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Report Apple toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2

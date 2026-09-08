@@ -59,7 +59,7 @@ jobs:
 
   ios:
     name: Build unsigned iOS IPA
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
 
     steps:
@@ -67,7 +67,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Accept Xcode license
-        run: sudo xcodebuild -license accept || true
+        run: |
+          sudo xcodebuild -license accept || true
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
