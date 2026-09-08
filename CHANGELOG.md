@@ -3,7 +3,7 @@
 All notable changes to AlnPlay are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
-## 0.3.9
+## 1.0.0
 
 ### Added
 
