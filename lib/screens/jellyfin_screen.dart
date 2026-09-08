@@ -471,13 +471,22 @@ class _JellyfinScreenState extends State<JellyfinScreen> {
 
   Widget _serverList(BuildContext context) {
     if (_servers.isEmpty && _discovered.isEmpty) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.live_tv_outlined, size: 48, color: Colors.white38),
-            SizedBox(height: 12),
-            AppText('Nothing yet', style: TextStyle(color: Colors.white54)),
+            Icon(
+              Icons.live_tv_outlined,
+              size: 48,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            AppText(
+              'Nothing yet',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
           ],
         ),
       );

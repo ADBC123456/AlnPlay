@@ -1,107 +1,231 @@
-name: iOS Build
+name: Build AlnPlay IPA
 
 on:
   workflow_dispatch:
     inputs:
-      upload_testflight:
-        description: 'Upload to TestFlight after signing'
-        type: boolean
-        required: false
-        default: false
+      build_mode:
+        description: Build mode (unsigned works without Apple signing secrets)
+        type: choice
+        required: true
+        default: unsigned
+        options:
+          - unsigned
+          - signed
+          - testflight
 
 jobs:
   build-ios:
-    name: Build iOS app
-    runs-on: macos-latest
-    timeout-minutes: 60
+    name: Build AlnPlay IPA (${{ inputs.build_mode }})
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      BUILD_MODE: ${{ inputs.build_mode }}
+      IOS_CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
+      IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+      IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+      APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+      APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+      APPSTORE_API_KEY: ${{ secrets.APPSTORE_API_KEY }}
+      TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+      OPENSUBTITLES_API_KEY: ${{ secrets.OPENSUBTITLES_API_KEY }}
+      SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Accept Xcode license
-        run: sudo xcodebuild -license accept || true
-
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.2'
           channel: stable
+          cache: true
 
       - name: Fetch dependencies
         run: |
-          flutter config --enable-ios
+          flutter config --enable-ios --enable-swift-package-manager
           flutter pub get
 
       - name: Run tests
         run: flutter test
 
-      # --- Unsigned build (always produced so you can inspect the app) ---
+      # Always create an unsigned IPA. Windows and WSL users do not need Apple
+      # signing secrets to obtain this artifact for an external signing tool.
       - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }} --dart-define=OPENSUBTITLES_API_KEY=${{ secrets.OPENSUBTITLES_API_KEY }} --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
+            --dart-define=OPENSUBTITLES_API_KEY="$OPENSUBTITLES_API_KEY" \
+            --dart-define=SIMKL_CLIENT_ID="$SIMKL_CLIENT_ID"
 
       - name: Package unsigned IPA
+        id: unsigned_ipa
+        shell: bash
         run: |
-          VERSION="$(grep '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)"
-          mkdir -p Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -ryq "DreamPlayer-${VERSION}.ipa" Payload
+          set -euo pipefail
+          VERSION="$(awk '/^version:/ {print $2; exit}' pubspec.yaml | cut -d+ -f1)"
+          APP_PATH="build/ios/iphoneos/Runner.app"
+          PACKAGE_ROOT="$RUNNER_TEMP/alnplay-unsigned"
+          IPA_PATH="build/ios/ipa/AlnPlay-${VERSION}-unsigned.ipa"
+
+          test -d "$APP_PATH"
+          rm -rf "$PACKAGE_ROOT"
+          mkdir -p "$PACKAGE_ROOT/Payload" "$(dirname "$IPA_PATH")"
+          cp -R "$APP_PATH" "$PACKAGE_ROOT/Payload/AlnPlay.app"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$PACKAGE_ROOT/Payload" "$IPA_PATH"
+          echo "ipa_path=$IPA_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: DreamPlayer.ipa
-          path: DreamPlayer-*.ipa
+          name: AlnPlay-unsigned-ipa
+          path: ${{ steps.unsigned_ipa.outputs.ipa_path }}
+          if-no-files-found: error
 
-      # --- Code signing (only runs once secrets are configured) ---
+      - name: Validate signing secrets
+        if: ${{ env.BUILD_MODE != 'unsigned' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -n "$IOS_CERT_BASE64" ]] || missing+=(IOS_CERT_BASE64)
+          [[ -n "$IOS_PROFILE_BASE64" ]] || missing+=(IOS_PROFILE_BASE64)
+
+          if [[ "$BUILD_MODE" == "testflight" ]]; then
+            [[ -n "$APPSTORE_ISSUER_ID" ]] || missing+=(APPSTORE_ISSUER_ID)
+            [[ -n "$APPSTORE_API_KEY_ID" ]] || missing+=(APPSTORE_API_KEY_ID)
+            [[ -n "$APPSTORE_API_KEY" ]] || missing+=(APPSTORE_API_KEY)
+          fi
+
+          if (( ${#missing[@]} )); then
+            printf 'Missing required GitHub Actions secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
       - name: Import signing certificate
-        if: ${{ env.CERT_BASE64 != '' }}
-        env:
-          CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
-          CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+        if: ${{ env.BUILD_MODE != 'unsigned' }}
+        shell: bash
         run: |
-          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
-          echo "$CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security create-keychain -p "$CERT_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$CERT_PASSWORD" "$KEYCHAIN"
-          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$CERT_PASSWORD" "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN"
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/AlnPlay-distribution.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/AlnPlay-signing.keychain-db"
+          KEYCHAIN_PASSWORD="actions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
-      - name: Install provisioning profile
-        if: ${{ env.PROFILE_BASE64 != '' }}
-        env:
-          PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+          printf '%s' "$IOS_CERT_BASE64" | base64 -D > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_CERT_PASSWORD" -A \
+            -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+      - name: Install provisioning profile and configure signing
+        if: ${{ env.BUILD_MODE != 'unsigned' }}
+        shell: bash
         run: |
-          echo "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/DreamPlayer.mobileprovision"
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          cp "$RUNNER_TEMP/DreamPlayer.mobileprovision" \
-             "$HOME/Library/MobileDevice/Provisioning Profiles/"
+          set -euo pipefail
+          PROFILE_PATH="$RUNNER_TEMP/AlnPlay.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/AlnPlay-profile.plist"
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+
+          printf '%s' "$IOS_PROFILE_BASE64" | base64 -D > "$PROFILE_PATH"
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+
+          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")"
+          TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")"
+
+          mkdir -p "$PROFILE_DIR"
+          cp "$PROFILE_PATH" "$PROFILE_DIR/$PROFILE_UUID.mobileprovision"
+
+          cat >> ios/Flutter/Release.xcconfig <<EOF
+          DEVELOPMENT_TEAM=$TEAM_ID
+          CODE_SIGN_STYLE=Manual
+          CODE_SIGN_IDENTITY=Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME
+          EOF
+
+          {
+            echo "PROFILE_NAME=$PROFILE_NAME"
+            echo "TEAM_ID=$TEAM_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Create export options
+        if: ${{ env.BUILD_MODE != 'unsigned' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$BUILD_MODE" == "testflight" ]]; then
+            EXPORT_METHOD="app-store-connect"
+          else
+            EXPORT_METHOD="ad-hoc"
+          fi
+
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>$EXPORT_METHOD</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>teamID</key>
+            <string>$TEAM_ID</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.dreamplayer.app</key>
+              <string>$PROFILE_NAME</string>
+            </dict>
+            <key>stripSwiftSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
 
       - name: Build signed IPA
-        if: ${{ env.HAVE_CERT != '' && env.HAVE_PROFILE != '' }}
-        env:
-          HAVE_CERT: ${{ secrets.IOS_CERT_BASE64 }}
-          HAVE_PROFILE: ${{ secrets.IOS_PROFILE_BASE64 }}
-        run: flutter build ipa --release --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }} --dart-define=OPENSUBTITLES_API_KEY=${{ secrets.OPENSUBTITLES_API_KEY }} --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}
+        if: ${{ env.BUILD_MODE != 'unsigned' }}
+        run: |
+          flutter clean
+          flutter pub get
+          flutter build ipa --release \
+            --export-options-plist="$RUNNER_TEMP/ExportOptions.plist" \
+            --dart-define=TMDB_API_KEY="$TMDB_API_KEY" \
+            --dart-define=OPENSUBTITLES_API_KEY="$OPENSUBTITLES_API_KEY" \
+            --dart-define=SIMKL_CLIENT_ID="$SIMKL_CLIENT_ID"
+
+      - name: Normalize signed IPA name
+        if: ${{ env.BUILD_MODE != 'unsigned' }}
+        id: signed_ipa
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(awk '/^version:/ {print $2; exit}' pubspec.yaml | cut -d+ -f1)"
+          SOURCE_IPA="$(find build/ios/ipa -maxdepth 1 -type f -name '*.ipa' \
+            ! -name '*-unsigned.ipa' -print -quit)"
+          test -n "$SOURCE_IPA"
+          TARGET_IPA="build/ios/ipa/AlnPlay-${VERSION}-signed.ipa"
+          mv "$SOURCE_IPA" "$TARGET_IPA"
+          echo "ipa_path=$TARGET_IPA" >> "$GITHUB_OUTPUT"
 
       - name: Upload signed IPA
-        if: ${{ env.HAVE_CERT != '' && env.HAVE_PROFILE != '' }}
-        env:
-          HAVE_CERT: ${{ secrets.IOS_CERT_BASE64 }}
-          HAVE_PROFILE: ${{ secrets.IOS_PROFILE_BASE64 }}
+        if: ${{ env.BUILD_MODE != 'unsigned' }}
         uses: actions/upload-artifact@v4
         with:
-          name: DreamPlayer.ipa
-          path: build/ios/ipa/*.ipa
+          name: AlnPlay-signed-ipa
+          path: ${{ steps.signed_ipa.outputs.ipa_path }}
+          if-no-files-found: error
 
       - name: Upload to TestFlight
-        if: ${{ inputs.upload_testflight == true && env.APPSTORE_KEY != '' }}
-        env:
-          APPSTORE_KEY: ${{ secrets.APPSTORE_API_KEY }}
+        if: ${{ env.BUILD_MODE == 'testflight' }}
         uses: apple-actions/upload-testflight-build@v1
         with:
-          app-path: build/ios/ipa/*.ipa
-          issuer-id: ${{ secrets.APPSTORE_ISSUER_ID }}
-          api-key-id: ${{ secrets.APPSTORE_API_KEY_ID }}
-          api-private-key: ${{ secrets.APPSTORE_API_KEY }}
+          app-path: ${{ steps.signed_ipa.outputs.ipa_path }}
+          issuer-id: ${{ env.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ env.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ env.APPSTORE_API_KEY }}

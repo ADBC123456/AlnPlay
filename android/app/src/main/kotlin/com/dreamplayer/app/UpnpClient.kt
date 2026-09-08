@@ -113,7 +113,7 @@ class UpnpClient(private val context: Context) {
                     "MX: 3\r\n" +
                     "ST: $st\r\n" +
                     // Also try generic to catch more devices; some servers only answer to ssdp:all.
-                    "USER-AGENT: DreamPlayer/1.0 UPnP/1.0\r\n\r\n"
+                    "USER-AGENT: AlnPlay/1.0 UPnP/1.0\r\n\r\n"
                 ).toByteArray(Charsets.UTF_8)
             val pkt = DatagramPacket(msg, msg.size, InetAddress.getByName(SSDP_ADDR), SSDP_PORT)
             // Send twice (common DLNA practice — cheap and helps lossy Wi-Fi).

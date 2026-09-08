@@ -202,10 +202,10 @@ class _VideoCardState extends State<VideoCard> {
                                       (_thumb == null &&
                                           tmdbMeta?.movie.backdropUrl() ==
                                               null))
-                                  ? const Icon(
+                                  ? Icon(
                                       Icons.play_circle_outline,
                                       size: 40,
-                                      color: Colors.white54,
+                                      color: colorScheme.onSurfaceVariant,
                                     )
                                   : const SizedBox.shrink(),
                             ),

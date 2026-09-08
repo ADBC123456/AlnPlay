@@ -2,7 +2,7 @@ name: Release
 
 # Publishing a release is just tagging: `git tag v0.1.0 && git push origin v0.1.0`.
 # This workflow builds the Android split-per-abi APKs and the unsigned
-# iOS IPA, then creates a GitHub Release on the tag and attaches them all.
+# iOS IPA, then creates an AlnPlay GitHub Release on version tags.
 # (No AAB — Play Store publishing isn't set up yet.)
 on:
   push:
@@ -26,6 +26,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.2'
           channel: stable
 
       - name: Fetch dependencies
@@ -44,22 +45,22 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cd build/app/outputs/flutter-apk
-          mv app-release.apk "DreamPlayer-${VERSION}-universal.apk"
-          mv app-arm64-v8a-release.apk "DreamPlayer-${VERSION}-arm64-v8a.apk"
-          mv app-armeabi-v7a-release.apk "DreamPlayer-${VERSION}-armeabi-v7a.apk"
-          mv app-x86_64-release.apk "DreamPlayer-${VERSION}-x86_64.apk"
+          mv app-release.apk "AlnPlay-${VERSION}-universal.apk"
+          mv app-arm64-v8a-release.apk "AlnPlay-${VERSION}-arm64-v8a.apk"
+          mv app-armeabi-v7a-release.apk "AlnPlay-${VERSION}-armeabi-v7a.apk"
+          mv app-x86_64-release.apk "AlnPlay-${VERSION}-x86_64.apk"
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dreamplayer-android
+          name: AlnPlay-android
           path: |
-            build/app/outputs/flutter-apk/DreamPlayer-*.apk
+            build/app/outputs/flutter-apk/AlnPlay-*.apk
 
   ios:
     name: Build unsigned iOS IPA
-    runs-on: macos-latest
-    timeout-minutes: 60
+    runs-on: macos-15
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -71,11 +72,12 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.2'
           channel: stable
 
       - name: Fetch dependencies
         run: |
-          flutter config --enable-ios
+          flutter config --enable-ios --enable-swift-package-manager
           flutter pub get
 
       - name: Build unsigned iOS app
@@ -86,16 +88,17 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -ryq "DreamPlayer-${VERSION}.ipa" Payload
+          zip -ryq "AlnPlay-${VERSION}-unsigned.ipa" Payload
 
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dreamplayer-ios
-          path: DreamPlayer-*.ipa
+          name: AlnPlay-ios-unsigned
+          path: AlnPlay-*-unsigned.ipa
 
   release:
     name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [android, ios]
     runs-on: ubuntu-latest
 
@@ -117,7 +120,7 @@ jobs:
             insec { print }
           ' CHANGELOG.md > /tmp/changelog-entry.md
           {
-            echo "## What's new in DreamPlayer $VERSION"
+            echo "## What's new in AlnPlay $VERSION"
             echo
             cat /tmp/changelog-entry.md
             echo
@@ -131,5 +134,5 @@ jobs:
           body_path: ${{ env.BODY }}
           generate_release_notes: true
           files: |
-            artifacts/dreamplayer-android/**/*.apk
-            artifacts/dreamplayer-ios/DreamPlayer-*.ipa
+            artifacts/AlnPlay-android/**/*.apk
+            artifacts/AlnPlay-ios-unsigned/AlnPlay-*-unsigned.ipa

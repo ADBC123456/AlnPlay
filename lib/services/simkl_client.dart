@@ -69,9 +69,9 @@ class SimklClient {
 
   static const String _prefsKey = 'dreamplayer.simkl';
   static const String _base = 'https://api.simkl.com';
-  static const String _appName = 'DreamPlayer';
+  static const String _appName = 'AlnPlay';
   static const String _appVersion = '0.3.1';
-  static const String _userAgent = 'DreamPlayer/0.3.1';
+  static const String _userAgent = 'AlnPlay/0.3.1';
 
   final SharedPreferences? _prefs;
   SharedPreferences? _cachedPrefs;

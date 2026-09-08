@@ -7,12 +7,16 @@ import '../danmaku/binding/danmaku_binding_store.dart';
 import '../danmaku/scraper/scrape_state.dart';
 import '../danmaku/service/danmaku_service.dart';
 import '../library/models/library_models.dart';
+import '../library/episode_target.dart';
 import '../library/title_playback_preferences.dart';
 import '../library/unified_library_service.dart';
 import '../l10n/app_localizations.dart';
 import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/library_folders.dart';
+import '../services/watched_store.dart';
+import '../theme/app_theme.dart';
+import '../widgets/episode_picker_sheet.dart';
 import 'danmaku_scrape_screen.dart';
 import 'player_screen.dart';
 
@@ -29,25 +33,39 @@ class UnifiedTitleDetailsScreen extends StatefulWidget {
 }
 
 class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
-  static const _pageColor = Color(0xFF20212B);
+  Color get _pageColor => Theme.of(context).scaffoldBackgroundColor;
 
   final UnifiedLibraryService _library = UnifiedLibraryService.instance;
-  List<ContinueWatchingEntry> _progress = const [];
+  final ScrollController _pageController = ScrollController();
+  List<ContinueWatchingEntry> _progress = [];
   int? _selectedSeason;
   bool _seasonChosen = false;
+  bool _progressLoaded = false;
+  int _progressRequest = 0;
+  int _focusRevision = 0;
+  EpisodeTarget? _target;
+  TitlePlaybackPreference? _preference;
+  Set<String> _watched = const {};
   bool _opening = false;
   bool _refreshing = false;
   bool _overviewExpanded = false;
   Map<String, ScrapeEpisodeState> _danmakuByFileKey = const {};
   String? _requestedDanmakuScope;
+  double _heroHeight = 0;
+  bool _pastHero = false;
 
-  ContinueWatchingEntry? get _resume => _progress.firstOrNull;
+  ContinueWatchingEntry? get _resume =>
+      _target?.progress ??
+      (_library.snapshot.titles[widget.titleId]?.kind == MediaTitleKind.movie
+          ? _progress.firstOrNull
+          : null);
 
   @override
   void initState() {
     super.initState();
     _library.addListener(_onLibraryChanged);
     ContinueWatchingStore.changes.addListener(_loadProgress);
+    _pageController.addListener(_onPageScrolled);
     _loadProgress();
   }
 
@@ -55,20 +73,67 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
   void dispose() {
     _library.removeListener(_onLibraryChanged);
     ContinueWatchingStore.changes.removeListener(_loadProgress);
+    _pageController.removeListener(_onPageScrolled);
+    _pageController.dispose();
     super.dispose();
   }
 
-  void _onLibraryChanged() {
-    if (mounted) setState(() {});
+  void _onPageScrolled() {
+    final pastHero =
+        _pageController.offset >= (_heroHeight - 72).clamp(0, double.infinity);
+    if (pastHero != _pastHero && mounted) setState(() => _pastHero = pastHero);
   }
 
-  Future<void> _loadProgress() async {
-    final entries =
-        (await ContinueWatchingStore.load())
-            .where((e) => e.video.metadataContext?.titleId == widget.titleId)
-            .toList()
-          ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    if (mounted) setState(() => _progress = entries);
+  void _onLibraryChanged() {
+    if (mounted) {
+      setState(() {
+        _target = resolveEpisodeTarget(
+          snapshot: _library.snapshot,
+          titleId: widget.titleId,
+          progress: _progress,
+          preference: _preference,
+          watchedKeys: _watched,
+        );
+      });
+    }
+  }
+
+  Future<void> _loadProgress({bool focus = false}) async {
+    final request = ++_progressRequest;
+    final entries = await ContinueWatchingStore.load();
+    final preference = await TitlePlaybackPreferences.load(widget.titleId);
+    final watched = await WatchedStore.load();
+    if (!mounted || request != _progressRequest) return;
+    final keys = _library.snapshot
+        .filesForTitle(widget.titleId)
+        .map((file) => file.legacyResumeKey)
+        .toSet();
+    setState(() {
+      _progress =
+          entries
+              .where(
+                (entry) =>
+                    entry.video.metadataContext?.titleId == widget.titleId ||
+                    keys.contains(ContinueWatchingStore.keyFor(entry.video)),
+              )
+              .toList()
+            ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      _preference = preference;
+      _watched = watched;
+      _target = resolveEpisodeTarget(
+        snapshot: _library.snapshot,
+        titleId: widget.titleId,
+        progress: _progress,
+        preference: preference,
+        watchedKeys: watched,
+      );
+      if (!_progressLoaded || focus) {
+        _selectedSeason = _target?.episode.seasonNumber;
+        _seasonChosen = _target != null;
+        _focusRevision++;
+      }
+      _progressLoaded = true;
+    });
   }
 
   @override
@@ -79,7 +144,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
       return Scaffold(
         backgroundColor: _pageColor,
         appBar: AppBar(backgroundColor: Colors.transparent),
-        body: const Center(child: AppText('影片信息不可用')),
+        body: Center(child: AppText('影片信息不可用')),
       );
     }
 
@@ -88,30 +153,27 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
         .where((f) => f.availability != MediaAvailability.missing)
         .toList();
     final episodes =
-        snapshot.episodes.values
-            .where(
-              (e) =>
-                  e.titleId == title.id &&
-                  snapshot.versionsForEpisode(e.id).isNotEmpty,
-            )
-            .toList()
+        snapshot.episodes.values.where((e) => e.titleId == title.id).toList()
           ..sort(_compareEpisodes);
-    final seasons =
+    final List<int?> seasons =
         episodes.map((e) => e.seasonNumber).whereType<int>().toSet().toList()
           ..sort();
-    if (!_seasonChosen && seasons.isNotEmpty) {
+    if (episodes.any((episode) => episode.seasonNumber == null)) {
+      seasons.add(null);
+    }
+    if (_progressLoaded && !_seasonChosen && seasons.isNotEmpty) {
       _seasonChosen = true;
       _selectedSeason = seasons.firstWhere(
-        (s) => s > 0,
+        (s) => s != null && s > 0,
         orElse: () => seasons.first,
       );
     }
     if (_selectedSeason != null && !seasons.contains(_selectedSeason)) {
       _selectedSeason = seasons.firstOrNull;
     }
-    final visibleEpisodes = seasons.length <= 1
-        ? episodes
-        : episodes.where((e) => e.seasonNumber == _selectedSeason).toList();
+    final visibleEpisodes = episodes
+        .where((e) => e.seasonNumber == _selectedSeason)
+        .toList();
     final danmakuScope = '${title.id}:s${_selectedSeason ?? 'unknown'}';
     if (_requestedDanmakuScope != danmakuScope) {
       _requestedDanmakuScope = danmakuScope;
@@ -124,136 +186,178 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
         .toList();
 
     final media = MediaQuery.of(context);
-    final heroHeight = media.orientation == Orientation.landscape
-        ? (media.size.height * .73).clamp(440.0, 720.0)
-        : (media.size.height * .62).clamp(440.0, 610.0);
+    final textScale = media.textScaler.scale(14) / 14;
+    final heroHeight =
+        (media.size.width >= 900
+            ? (media.size.height * .56).clamp(380.0, 520.0)
+            : (media.size.height * .62).clamp(440.0, 610.0)) +
+        (textScale - 1).clamp(0.0, 2.0) * 130;
+    _heroHeight = heroHeight;
 
-    return Scaffold(
-      backgroundColor: _pageColor,
-      body: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: SizedBox(
-              height: heroHeight,
-              child: _TitleHero(
-                title: title,
-                ownedEpisodes: episodes.length,
-                playLabel: _primaryLabel(),
-                opening: _opening,
-                refreshing: _refreshing,
-                canPlay: files.isNotEmpty,
-                onBack: () => Navigator.maybePop(context),
-                onPlay: () => _playPrimary(title, episodes, files),
-                onPlayMpv: Platform.isAndroid
-                    ? () => _playPrimary(
-                        title,
-                        episodes,
-                        files,
-                        engine: PlayEngine.mpv,
-                      )
-                    : null,
-                onMenu: (value) =>
-                    _handleMenu(value, title, files, visibleEpisodes),
+    final pageOverlay = _pastHero
+        ? AppTheme.systemOverlayStyle(Theme.of(context).brightness)
+        : SystemUiOverlayStyle.light.copyWith(
+            statusBarColor: Colors.transparent,
+            systemNavigationBarColor: Colors.transparent,
+          );
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: pageOverlay,
+      child: Scaffold(
+        backgroundColor: _pageColor,
+        body: CustomScrollView(
+          controller: _pageController,
+          slivers: [
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: heroHeight,
+                child: _TitleHero(
+                  title: title,
+                  ownedEpisodes: episodes.length,
+                  playLabel: _primaryLabel(),
+                  opening: _opening,
+                  refreshing: _refreshing,
+                  canPlay: _progressLoaded && files.isNotEmpty,
+                  onBack: () => Navigator.maybePop(context),
+                  onPlay: () => _playPrimary(title, episodes, files),
+                  onPlayMpv: Platform.isAndroid
+                      ? () => _playPrimary(
+                          title,
+                          episodes,
+                          files,
+                          engine: PlayEngine.mpv,
+                        )
+                      : null,
+                  onMenu: (value) =>
+                      _handleMenu(value, title, files, visibleEpisodes),
+                ),
               ),
             ),
-          ),
-          if (title.overview.isNotEmpty)
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 18),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(6),
-                  onTap: () =>
-                      setState(() => _overviewExpanded = !_overviewExpanded),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 5),
-                    child: AppText(
-                      title.overview,
-                      maxLines: _overviewExpanded ? null : 3,
-                      overflow: _overviewExpanded
-                          ? TextOverflow.visible
-                          : TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                        height: 1.55,
+            if (title.overview.isNotEmpty)
+              SliverToBoxAdapter(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: 920),
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(24, 0, 24, 18),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () => setState(
+                          () => _overviewExpanded = !_overviewExpanded,
+                        ),
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 5),
+                          child: AppText(
+                            title.overview,
+                            maxLines: _overviewExpanded ? null : 3,
+                            overflow: _overviewExpanded
+                                ? TextOverflow.visible
+                                : TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                              fontSize: 14,
+                              height: 1.55,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-          if (title.kind == MediaTitleKind.tv) ...[
-            SliverToBoxAdapter(
-              child: _SeasonHeader(
-                seasons: seasons,
-                selected: _selectedSeason,
-                onSelected: (season) {
-                  _requestedDanmakuScope = null;
-                  setState(() => _selectedSeason = season);
-                },
-                onDanmaku: visibleEpisodes.isEmpty
-                    ? null
-                    : () => _openDanmaku(
-                        title,
-                        _selectedSeason,
-                        visibleEpisodes,
-                        suggestedEpisode: _suggestedDanmakuEpisode(
-                          visibleEpisodes,
-                        ),
+            if (title.kind == MediaTitleKind.tv) ...[
+              SliverToBoxAdapter(
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: 960),
+                    child: _SeasonHeader(
+                      seasons: seasons,
+                      selected: _selectedSeason,
+                      onSelected: (season) {
+                        _requestedDanmakuScope = null;
+                        setState(() => _selectedSeason = season);
+                      },
+                      onEpisodes: () =>
+                          _openEpisodePicker(title, visibleEpisodes),
+                      onDanmaku: visibleEpisodes.isEmpty
+                          ? null
+                          : () => _openDanmaku(
+                              title,
+                              _selectedSeason,
+                              visibleEpisodes,
+                              suggestedEpisode: _suggestedDanmakuEpisode(
+                                visibleEpisodes,
+                              ),
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+              if (!_progressLoaded)
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: 210,
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                )
+              else if (visibleEpisodes.isEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(24, 20, 24, 32),
+                    child: AppText(
+                      '这一季暂时没有可播放的剧集',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
-              ),
-            ),
-            if (visibleEpisodes.isEmpty)
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(24, 20, 24, 32),
-                  child: AppText(
-                    '这一季暂时没有可播放的剧集',
-                    style: TextStyle(color: Colors.white60),
+                    ),
+                  ),
+                )
+              else
+                SliverToBoxAdapter(
+                  child: _EpisodeRail(
+                    key: ValueKey(_selectedSeason),
+                    targetEpisodeId: _target?.episode.id,
+                    focusRevision: _focusRevision,
+                    episodes: visibleEpisodes,
+                    versionsFor: snapshot.versionsForEpisode,
+                    progressFor: _episodeProgress,
+                    danmakuFor: _episodeDanmaku,
+                    onPlay: (episode, versions) =>
+                        _chooseAndPlay(title, episode, versions),
+                    onMore: (episode, versions) =>
+                        _showEpisodeActions(title, episode, versions),
                   ),
                 ),
-              )
-            else
-              SliverToBoxAdapter(
-                child: _EpisodeRail(
-                  episodes: visibleEpisodes,
-                  versionsFor: snapshot.versionsForEpisode,
-                  progressFor: _episodeProgress,
-                  danmakuFor: _episodeDanmaku,
-                  onPlay: (episode, versions) =>
-                      _chooseAndPlay(title, episode, versions),
-                  onMore: (episode, versions) =>
-                      _showEpisodeActions(title, episode, versions),
-                ),
-              ),
-            if (duplicates.isNotEmpty)
-              SliverToBoxAdapter(
-                child: _DuplicateNotice(
-                  count: duplicates.length,
-                  onTap: () => _showDuplicates(title, duplicates),
-                ),
-              ),
-          ] else
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-              sliver: SliverList.builder(
-                itemCount: files.length,
-                itemBuilder: (_, index) => ListTile(
-                  minTileHeight: 62,
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.movie_outlined),
-                  title: AppText(files[index].originalFileName),
-                  subtitle: AppText(
-                    '${_sourceLabel(files[index])} · ${_sizeLabel(files[index].sizeBytes)}',
+              if (duplicates.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: _DuplicateNotice(
+                    count: duplicates.length,
+                    onTap: () => _showDuplicates(title, duplicates),
                   ),
-                  trailing: const Icon(Icons.play_arrow_rounded),
-                  onTap: () => _playVersion(title, null, files[index]),
+                ),
+            ] else
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
+                sliver: SliverList.builder(
+                  itemCount: files.length,
+                  itemBuilder: (_, index) => ListTile(
+                    minTileHeight: 62,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.movie_outlined),
+                    title: AppText(files[index].originalFileName),
+                    subtitle: AppText(
+                      '${_sourceLabel(files[index])} · ${_sizeLabel(files[index].sizeBytes)}',
+                    ),
+                    trailing: Icon(Icons.play_arrow_rounded),
+                    onTap: () => _playVersion(title, null, files[index]),
+                  ),
                 ),
               ),
-            ),
-          const SliverToBoxAdapter(child: SizedBox(height: 42)),
-        ],
+            SliverToBoxAdapter(child: SizedBox(height: 42)),
+          ],
+        ),
       ),
     );
   }
@@ -340,7 +444,9 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
 
   String _primaryLabel() {
     final entry = _resume;
-    if (entry == null) return '播放';
+    if (entry == null) {
+      return _target == null ? '播放' : '播放第 ${_target!.episode.episodeNumber} 集';
+    }
     final episode = entry.video.metadataContext?.episodeNumber;
     return episode == null
         ? '继续播放  ${_clock(entry.position)}'
@@ -371,7 +477,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: AppText('片名已复制')));
+        ).showSnackBar(SnackBar(content: AppText('片名已复制')));
       }
     }
   }
@@ -386,7 +492,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
     if (folders.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: AppText('没有找到可刷新的来源目录')));
+      ).showSnackBar(SnackBar(content: AppText('没有找到可刷新的来源目录')));
       return;
     }
     setState(() => _refreshing = true);
@@ -395,7 +501,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: AppText('刮削信息已刷新')));
+        ).showSnackBar(SnackBar(content: AppText('刮削信息已刷新')));
       }
     } catch (error) {
       if (mounted) {
@@ -418,23 +524,22 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
       await _chooseAndPlay(title, null, files, engine: engine);
       return;
     }
-    if (episodes.isEmpty) return;
-    final resumeKey = _resume?.video.resumeKey;
-    final resumeFile = resumeKey == null
-        ? null
-        : files.where((f) => f.legacyResumeKey == resumeKey).firstOrNull;
-    if (resumeFile != null) {
-      final episode = resumeFile.episodeId == null
-          ? null
-          : _library.snapshot.episodes[resumeFile.episodeId];
-      await _playVersion(title, episode, resumeFile, engine: engine);
+    final target = _target;
+    if (target == null) return;
+    if (target.progress != null || target.replay) {
+      await _playVersion(
+        title,
+        target.episode,
+        target.file,
+        engine: engine,
+        startFromBeginning: target.replay,
+      );
       return;
     }
-    final first = episodes.first;
     await _chooseAndPlay(
       title,
-      first,
-      _library.snapshot.versionsForEpisode(first.id),
+      target.episode,
+      _library.snapshot.versionsForEpisode(target.episode.id),
       engine: engine,
     );
   }
@@ -463,7 +568,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: const Color(0xFF292A35),
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
       builder: (_) => _VersionSheet(episode: episode, versions: versions),
     );
     if (selected == null) return;
@@ -476,11 +581,64 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
     await _playVersion(title, episode, selected.file, engine: engine);
   }
 
+  Future<void> _openEpisodePicker(
+    MediaTitle title,
+    List<LibraryEpisode> episodes,
+  ) async {
+    final selected = await showModalBottomSheet<LibraryEpisode>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      constraints: BoxConstraints(maxWidth: 820),
+      builder: (_) => EpisodePickerSheet(
+        episodes: episodes,
+        season: _selectedSeason,
+        currentEpisodeId: _target?.episode.id,
+        // The model's total is title-wide, not a per-season count.
+        total:
+            _library.snapshot.episodes.values
+                    .where((episode) => episode.titleId == title.id)
+                    .map((episode) => episode.seasonNumber)
+                    .toSet()
+                    .length ==
+                1
+            ? title.totalEpisodeCount
+            : null,
+        isAvailable: (episode) =>
+            _library.snapshot.versionsForEpisode(episode.id).isNotEmpty,
+        positionFor: (episode) => _episodeProgress(
+          _library.snapshot.versionsForEpisode(episode.id),
+        )?.position,
+      ),
+    );
+    if (selected == null || !mounted) return;
+    final versions = _library.snapshot.versionsForEpisode(selected.id);
+    if (versions.isEmpty) return;
+    setState(() {
+      _target = EpisodeTarget(
+        selected,
+        versions.first,
+        progress: _progress
+            .where(
+              (entry) =>
+                  ContinueWatchingStore.keyFor(entry.video) ==
+                  versions.first.legacyResumeKey,
+            )
+            .firstOrNull,
+      );
+      _selectedSeason = selected.seasonNumber;
+      _focusRevision++;
+    });
+    await _chooseAndPlay(title, selected, versions);
+  }
+
   Future<void> _playVersion(
     MediaTitle title,
     LibraryEpisode? episode,
     MediaFile file, {
     PlayEngine engine = PlayEngine.media3,
+    bool startFromBeginning = false,
   }) async {
     setState(() => _opening = true);
     try {
@@ -496,18 +654,17 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
           revision: title.revision,
         ),
       );
-      await TitlePlaybackPreferences.save(
-        titleId: title.id,
-        lastPlayedFileId: file.id,
-        lastPlayedEpisodeId: episode?.id,
-      );
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => PlayerScreen(video: video, initialEngine: engine),
+          builder: (_) => PlayerScreen(
+            video: video,
+            initialEngine: engine,
+            startFromBeginning: startFromBeginning,
+          ),
         ),
       );
-      await _loadProgress();
+      await _loadProgress(focus: true);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -527,7 +684,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
     final action = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
-      backgroundColor: const Color(0xFF292A35),
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
       builder: (context) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -537,19 +694,19 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
                 '第 ${episode.episodeNumber} 集 · ${episode.displayName}',
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w700),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
             ListTile(
               minTileHeight: 56,
-              leading: const Icon(Icons.play_arrow_rounded),
+              leading: Icon(Icons.play_arrow_rounded),
               title: AppText(versions.length > 1 ? '选择播放版本' : '播放本集'),
               onTap: () => Navigator.pop(context, 'play'),
             ),
             ListTile(
               minTileHeight: 56,
-              leading: const Icon(Icons.subtitles_outlined),
-              title: const AppText('匹配本集弹幕'),
+              leading: Icon(Icons.subtitles_outlined),
+              title: AppText('匹配本集弹幕'),
               onTap: () => Navigator.pop(context, 'danmaku'),
             ),
           ],
@@ -559,23 +716,12 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
     if (action == 'play') {
       await _chooseAndPlay(title, episode, versions);
     } else if (action == 'danmaku') {
-      final seasonEpisodes =
-          _library.snapshot.episodes.values
-              .where(
-                (candidate) =>
-                    candidate.titleId == title.id &&
-                    candidate.seasonNumber == episode.seasonNumber &&
-                    _library.snapshot
-                        .versionsForEpisode(candidate.id)
-                        .isNotEmpty,
-              )
-              .toList()
-            ..sort(_compareEpisodes);
       await _openDanmaku(
         title,
         episode.seasonNumber,
-        seasonEpisodes,
+        [episode],
         suggestedEpisode: episode.episodeNumber,
+        matchSingleEpisode: true,
       );
     }
   }
@@ -588,7 +734,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: const Color(0xFF292A35),
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
       builder: (context) => SafeArea(
         child: ConstrainedBox(
           constraints: BoxConstraints(
@@ -598,18 +744,20 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(20, 6, 20, 8),
                 child: AppText(
                   '重复剧集版本',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
                 ),
               ),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                 child: AppText(
                   '同一集只显示一张卡片，所有来源版本都保留。',
-                  style: TextStyle(color: Colors.white60),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
               Flexible(
@@ -625,7 +773,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
                         subtitle: AppText(
                           '${_library.snapshot.versionsForEpisode(episode.id).length} 个版本',
                         ),
-                        trailing: const Icon(Icons.chevron_right),
+                        trailing: Icon(Icons.chevron_right),
                         onTap: () => Navigator.pop(context, episode),
                       ),
                   ],
@@ -650,6 +798,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
     int? season,
     List<LibraryEpisode> episodes, {
     int? suggestedEpisode,
+    bool matchSingleEpisode = false,
   }) async {
     final videos = <ScrapeVideo>[];
     for (final episode in episodes) {
@@ -681,6 +830,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
           enumerateFolder: false,
           openSeriesPickerOnReady: true,
           suggestedEpisode: suggestedEpisode,
+          matchSingleEpisode: matchSingleEpisode,
         ),
       ),
     );
@@ -729,133 +879,159 @@ class _TitleHero extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        const ColoredBox(color: Color(0xFF171820)),
+        ColoredBox(color: Color(0xFF171820)),
         _Artwork(primary: title.backdrop, fallback: title.poster),
-        const DecoratedBox(
+        DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              stops: [0, .46, .78, 1],
+              stops: [0, .30, .64, 1],
               colors: [
                 Color(0x28000000),
                 Color(0x08000000),
-                Color(0xB520212B),
-                Color(0xFF20212B),
+                Theme.of(
+                  context,
+                ).scaffoldBackgroundColor.withValues(alpha: .94),
+                Theme.of(context).scaffoldBackgroundColor,
               ],
             ),
           ),
         ),
         SafeArea(
           bottom: false,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(wide ? 28 : 12, 10, wide ? 28 : 12, 0),
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _CircleButton(
-                    tooltip: '返回',
-                    icon: Icons.arrow_back_ios_new_rounded,
-                    onPressed: onBack,
-                  ),
-                  PopupMenuButton<String>(
-                    tooltip: '更多操作',
-                    onSelected: onMenu,
-                    color: const Color(0xFF30313B),
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(
-                        value: 'refresh',
-                        child: _MenuRow(Icons.refresh, '刷新刮削信息'),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: 960),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  wide ? 28 : 12,
+                  10,
+                  wide ? 28 : 12,
+                  0,
+                ),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _CircleButton(
+                        tooltip: '返回',
+                        icon: Icons.arrow_back_ios_new_rounded,
+                        onPressed: onBack,
                       ),
-                      if (title.kind == MediaTitleKind.tv)
-                        const PopupMenuItem(
-                          value: 'danmaku',
-                          child: _MenuRow(Icons.subtitles_outlined, '匹配当前季弹幕'),
-                        ),
-                      const PopupMenuItem(
-                        value: 'copy',
-                        child: _MenuRow(Icons.copy_outlined, '复制片名'),
+                      PopupMenuButton<String>(
+                        tooltip: '更多操作',
+                        onSelected: onMenu,
+                        color: Theme.of(context).colorScheme.surfaceContainer,
+                        itemBuilder: (_) => [
+                          PopupMenuItem(
+                            value: 'refresh',
+                            child: _MenuRow(Icons.refresh, '刷新刮削信息'),
+                          ),
+                          if (title.kind == MediaTitleKind.tv)
+                            PopupMenuItem(
+                              value: 'danmaku',
+                              child: _MenuRow(
+                                Icons.subtitles_outlined,
+                                '匹配当前季弹幕',
+                              ),
+                            ),
+                          PopupMenuItem(
+                            value: 'copy',
+                            child: _MenuRow(Icons.copy_outlined, '复制片名'),
+                          ),
+                        ],
+                        child: _CircleSurface(loading: refreshing),
                       ),
                     ],
-                    child: _CircleSurface(loading: refreshing),
                   ),
-                ],
+                ),
               ),
             ),
           ),
         ),
         Positioned(
-          left: wide ? 38 : 20,
-          right: wide ? 38 : 20,
+          left: 0,
+          right: 0,
           bottom: wide ? 24 : 18,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AppText(
-                title.displayTitle,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: wide ? 34 : 28,
-                  height: 1.08,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -.4,
-                  shadows: const [
-                    Shadow(color: Colors.black54, blurRadius: 12),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: 960),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: wide ? 38 : 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AppText(
+                      title.displayTitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurface,
+                        fontSize: wide ? 34 : 28,
+                        height: 1.08,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -.4,
+                      ),
+                    ),
+                    SizedBox(height: 17),
+                    if (wide &&
+                        MediaQuery.textScalerOf(context).scale(14) <= 18)
+                      Row(
+                        children: [
+                          Flexible(
+                            child: _PlayButton(
+                              label: playLabel,
+                              loading: opening,
+                              enabled: canPlay,
+                              onTap: onPlay,
+                            ),
+                          ),
+                          if (onPlayMpv != null) ...[
+                            SizedBox(width: 10),
+                            _MpvButton(
+                              enabled: canPlay && !opening,
+                              onTap: onPlayMpv!,
+                            ),
+                          ],
+                          SizedBox(width: 20),
+                          Expanded(
+                            child: _Metadata(
+                              title: title,
+                              owned: ownedEpisodes,
+                            ),
+                          ),
+                        ],
+                      )
+                    else ...[
+                      _Metadata(title: title, owned: ownedEpisodes),
+                      SizedBox(height: 13),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _PlayButton(
+                              label: playLabel,
+                              loading: opening,
+                              enabled: canPlay,
+                              onTap: onPlay,
+                            ),
+                          ),
+                          if (onPlayMpv != null) ...[
+                            SizedBox(width: 10),
+                            _MpvButton(
+                              enabled: canPlay && !opening,
+                              onTap: onPlayMpv!,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
-              const SizedBox(height: 17),
-              if (wide)
-                Row(
-                  children: [
-                    _PlayButton(
-                      label: playLabel,
-                      loading: opening,
-                      enabled: canPlay,
-                      onTap: onPlay,
-                    ),
-                    if (onPlayMpv != null) ...[
-                      const SizedBox(width: 10),
-                      _MpvButton(
-                        enabled: canPlay && !opening,
-                        onTap: onPlayMpv!,
-                      ),
-                    ],
-                    const SizedBox(width: 20),
-                    Expanded(
-                      child: _Metadata(title: title, owned: ownedEpisodes),
-                    ),
-                  ],
-                )
-              else ...[
-                _Metadata(title: title, owned: ownedEpisodes),
-                const SizedBox(height: 13),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _PlayButton(
-                        label: playLabel,
-                        loading: opening,
-                        enabled: canPlay,
-                        onTap: onPlay,
-                      ),
-                    ),
-                    if (onPlayMpv != null) ...[
-                      const SizedBox(width: 10),
-                      _MpvButton(
-                        enabled: canPlay && !opening,
-                        onTap: onPlayMpv!,
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ],
@@ -872,7 +1048,7 @@ class _Artwork extends StatelessWidget {
   Widget build(BuildContext context) {
     final url = primary ?? fallback;
     if (url == null) {
-      return const Center(
+      return Center(
         child: Icon(Icons.movie_outlined, size: 72, color: Colors.white24),
       );
     }
@@ -886,9 +1062,9 @@ class _Artwork extends StatelessWidget {
               fallback!,
               fit: BoxFit.cover,
               alignment: Alignment.topCenter,
-              errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              errorBuilder: (_, _, _) => SizedBox.shrink(),
             )
-          : const SizedBox.shrink(),
+          : SizedBox.shrink(),
     );
   }
 }
@@ -906,7 +1082,7 @@ class _CircleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Material(
     color: Colors.black.withValues(alpha: .24),
-    shape: const CircleBorder(side: BorderSide(color: Colors.white38)),
+    shape: CircleBorder(side: BorderSide(color: Colors.white38)),
     child: IconButton(
       tooltip: tooltip,
       onPressed: onPressed,
@@ -923,19 +1099,19 @@ class _CircleSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Material(
     color: Colors.black.withValues(alpha: .24),
-    shape: const CircleBorder(side: BorderSide(color: Colors.white38)),
+    shape: CircleBorder(side: BorderSide(color: Colors.white38)),
     child: SizedBox.square(
       dimension: 48,
       child: Center(
         child: loading
-            ? const SizedBox.square(
+            ? SizedBox.square(
                 dimension: 19,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
                   color: Colors.white,
                 ),
               )
-            : const Icon(Icons.more_horiz_rounded, color: Colors.white),
+            : Icon(Icons.more_horiz_rounded, color: Colors.white),
       ),
     ),
   );
@@ -948,7 +1124,7 @@ class _MenuRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) =>
-      Row(children: [Icon(icon), const SizedBox(width: 12), AppText(label)]);
+      Row(children: [Icon(icon), SizedBox(width: 12), AppText(label)]);
 }
 
 class _PlayButton extends StatelessWidget {
@@ -966,22 +1142,24 @@ class _PlayButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => FilledButton.icon(
     style: FilledButton.styleFrom(
-      minimumSize: const Size(250, 54),
-      padding: const EdgeInsets.symmetric(horizontal: 22),
-      backgroundColor: Colors.white,
-      foregroundColor: const Color(0xFF171820),
-      disabledBackgroundColor: Colors.white24,
-      disabledForegroundColor: Colors.white54,
+      minimumSize: Size(0, 54),
+      padding: EdgeInsets.symmetric(horizontal: 22),
+      backgroundColor: Theme.of(context).colorScheme.onSurface,
+      foregroundColor: Theme.of(context).colorScheme.surface,
+      disabledBackgroundColor: Theme.of(
+        context,
+      ).colorScheme.surfaceContainerHigh,
+      disabledForegroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-      textStyle: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+      textStyle: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
     ),
     onPressed: enabled && !loading ? onTap : null,
     icon: loading
-        ? const SizedBox.square(
+        ? SizedBox.square(
             dimension: 19,
             child: CircularProgressIndicator(strokeWidth: 2),
           )
-        : const Icon(Icons.play_arrow_rounded, size: 27),
+        : Icon(Icons.play_arrow_rounded, size: 27),
     label: AppText(label, maxLines: 1, overflow: TextOverflow.ellipsis),
   );
 }
@@ -996,12 +1174,12 @@ class _MpvButton extends StatelessWidget {
     tooltip: '使用 MPV 播放',
     onPressed: enabled ? onTap : null,
     style: IconButton.styleFrom(
-      minimumSize: const Size(54, 54),
-      foregroundColor: Colors.white,
-      side: const BorderSide(color: Colors.white38),
+      minimumSize: Size(54, 54),
+      foregroundColor: Theme.of(context).colorScheme.onSurface,
+      side: BorderSide(color: Theme.of(context).colorScheme.outline),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
     ),
-    icon: const Icon(Icons.smart_display_outlined),
+    icon: Icon(Icons.smart_display_outlined),
   );
 }
 
@@ -1036,11 +1214,16 @@ class _Metadata extends StatelessWidget {
           children: [
             for (var i = 0; i < facts.length; i++) ...[
               if (i > 0)
-                const Text('·', style: TextStyle(color: Colors.white38)),
+                Text(
+                  '·',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                ),
               AppText(
                 facts[i],
-                style: const TextStyle(
-                  color: Colors.white,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
@@ -1049,12 +1232,15 @@ class _Metadata extends StatelessWidget {
           ],
         ),
         if (title.genres.isNotEmpty) ...[
-          const SizedBox(height: 7),
+          SizedBox(height: 7),
           AppText(
             title.genres.take(4).join('  '),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white70, fontSize: 13),
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 13,
+            ),
           ),
         ],
       ],
@@ -1068,15 +1254,17 @@ class _SeasonHeader extends StatelessWidget {
     required this.selected,
     required this.onSelected,
     required this.onDanmaku,
+    required this.onEpisodes,
   });
-  final List<int> seasons;
+  final List<int?> seasons;
   final int? selected;
-  final ValueChanged<int> onSelected;
+  final ValueChanged<int?> onSelected;
   final VoidCallback? onDanmaku;
+  final VoidCallback onEpisodes;
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(18, 4, 12, 7),
+    padding: EdgeInsets.fromLTRB(18, 4, 12, 7),
     child: Row(
       children: [
         Expanded(
@@ -1086,7 +1274,11 @@ class _SeasonHeader extends StatelessWidget {
               children: [
                 for (final season in seasons)
                   _SeasonTab(
-                    label: season == 0 ? '特别篇' : '第 $season 季',
+                    label: season == null
+                        ? '未知季'
+                        : season == 0
+                        ? '特别篇'
+                        : '第 $season 季',
                     selected: season == selected,
                     onTap: () => onSelected(season),
                   ),
@@ -1095,10 +1287,15 @@ class _SeasonHeader extends StatelessWidget {
           ),
         ),
         IconButton(
+          tooltip: '选集',
+          onPressed: onEpisodes,
+          icon: Icon(Icons.grid_view_rounded),
+        ),
+        IconButton(
           tooltip: '匹配当前季弹幕',
           onPressed: onDanmaku,
-          icon: const Icon(Icons.subtitles_outlined),
-          color: Colors.white70,
+          icon: Icon(Icons.subtitles_outlined),
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ],
     ),
@@ -1120,25 +1317,27 @@ class _SeasonTab extends StatelessWidget {
     onTap: onTap,
     borderRadius: BorderRadius.circular(4),
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(13, 10, 13, 8),
+      padding: EdgeInsets.fromLTRB(13, 10, 13, 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           AppText(
             label,
             style: TextStyle(
-              color: selected ? Colors.white : Colors.white54,
+              color: selected
+                  ? Theme.of(context).colorScheme.onSurface
+                  : Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 18,
               fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
             ),
           ),
-          const SizedBox(height: 7),
+          SizedBox(height: 7),
           AnimatedContainer(
-            duration: const Duration(milliseconds: 130),
+            duration: Duration(milliseconds: 130),
             width: selected ? 48 : 0,
             height: 3,
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).colorScheme.onSurface,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -1154,8 +1353,11 @@ class _EpisodeProgress {
   final double? fraction;
 }
 
-class _EpisodeRail extends StatelessWidget {
+class _EpisodeRail extends StatefulWidget {
   const _EpisodeRail({
+    super.key,
+    required this.targetEpisodeId,
+    required this.focusRevision,
     required this.episodes,
     required this.versionsFor,
     required this.progressFor,
@@ -1164,6 +1366,8 @@ class _EpisodeRail extends StatelessWidget {
     required this.onMore,
   });
   final List<LibraryEpisode> episodes;
+  final String? targetEpisodeId;
+  final int focusRevision;
   final List<MediaFile> Function(String) versionsFor;
   final _EpisodeProgress? Function(List<MediaFile>) progressFor;
   final ScrapeEpisodeState? Function(List<MediaFile>) danmakuFor;
@@ -1171,33 +1375,83 @@ class _EpisodeRail extends StatelessWidget {
   final void Function(LibraryEpisode, List<MediaFile>) onMore;
 
   @override
-  Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width >= 600 ? 214.0 : 174.0;
-    return SizedBox(
-      height: width * 9 / 16 + 94,
-      child: ListView.separated(
-        padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-        scrollDirection: Axis.horizontal,
-        itemCount: episodes.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 14),
-        itemBuilder: (_, index) {
-          final episode = episodes[index];
-          final versions = versionsFor(episode.id);
-          return SizedBox(
-            width: width,
-            child: _EpisodeCard(
-              episode: episode,
-              versions: versions,
-              progress: progressFor(versions),
-              danmaku: danmakuFor(versions),
-              onPlay: () => onPlay(episode, versions),
-              onMore: () => onMore(episode, versions),
-            ),
-          );
-        },
-      ),
-    );
+  State<_EpisodeRail> createState() => _EpisodeRailState();
+}
+
+class _EpisodeRailState extends State<_EpisodeRail> {
+  ScrollController? _controller;
+  double? _viewport;
+  bool _focusPending = false;
+
+  @override
+  void didUpdateWidget(covariant _EpisodeRail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Background metadata/danmaku refreshes must not steal a manual scroll.
+    if (oldWidget.focusRevision != widget.focusRevision) _focusPending = true;
   }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final viewport = constraints.maxWidth;
+      final width = viewport >= 900
+          ? 254.0
+          : viewport >= 600
+          ? 224.0
+          : 174.0;
+      final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+      final index = widget.episodes.indexWhere(
+        (episode) => episode.id == widget.targetEpisodeId,
+      );
+      final leadingPadding = (viewport - width) / 2;
+      final offset = (index < 0 ? 0 : index) * (width + 14);
+      if (_controller == null) {
+        // Start at the target before first paint: no flash of episode 1.
+        _controller = ScrollController(initialScrollOffset: offset);
+      } else if (_focusPending || _viewport != viewport) {
+        _focusPending = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_controller?.hasClients != true) return;
+          _controller!.jumpTo(
+            offset.clamp(0.0, _controller!.position.maxScrollExtent),
+          );
+        });
+      }
+      _viewport = viewport;
+      return SizedBox(
+        height: width * 9 / 16 + 48 + 68 * scale,
+        child: ListView.separated(
+          controller: _controller,
+          padding: EdgeInsets.fromLTRB(leadingPadding, 0, leadingPadding, 8),
+          scrollDirection: Axis.horizontal,
+          itemCount: widget.episodes.length,
+          separatorBuilder: (_, _) => SizedBox(width: 14),
+          itemBuilder: (_, index) {
+            final episode = widget.episodes[index];
+            final versions = widget.versionsFor(episode.id);
+            return SizedBox(
+              key: ValueKey('rail-${episode.id}'),
+              width: width,
+              child: _EpisodeCard(
+                episode: episode,
+                versions: versions,
+                progress: widget.progressFor(versions),
+                danmaku: widget.danmakuFor(versions),
+                onPlay: () => widget.onPlay(episode, versions),
+                onMore: () => widget.onMore(episode, versions),
+              ),
+            );
+          },
+        ),
+      );
+    },
+  );
 }
 
 class _EpisodeCard extends StatelessWidget {
@@ -1223,11 +1477,11 @@ class _EpisodeCard extends StatelessWidget {
       AspectRatio(
         aspectRatio: 16 / 9,
         child: Material(
-          color: const Color(0xFF30313A),
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
           clipBehavior: Clip.antiAlias,
           borderRadius: BorderRadius.circular(6),
           child: InkWell(
-            onTap: onPlay,
+            onTap: versions.isEmpty ? null : onPlay,
             child: Stack(
               fit: StackFit.expand,
               children: [
@@ -1235,17 +1489,17 @@ class _EpisodeCard extends StatelessWidget {
                   Image.network(
                     episode.still!,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                    errorBuilder: (_, _, _) => SizedBox.shrink(),
                   )
                 else
-                  const Center(
+                  Center(
                     child: Icon(
                       Icons.movie_outlined,
                       color: Colors.white24,
                       size: 36,
                     ),
                   ),
-                const DecoratedBox(
+                DecoratedBox(
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
@@ -1254,7 +1508,7 @@ class _EpisodeCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                const Center(
+                Center(
                   child: Icon(
                     Icons.play_arrow_rounded,
                     color: Colors.white,
@@ -1268,7 +1522,7 @@ class _EpisodeCard extends StatelessWidget {
                     bottom: 7,
                     child: AppText(
                       _clock(episode.runtime!),
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: Colors.white,
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -1284,7 +1538,7 @@ class _EpisodeCard extends StatelessWidget {
                     child: LinearProgressIndicator(
                       value: progress!.fraction,
                       minHeight: 3,
-                      color: const Color(0xFF3F8CFF),
+                      color: Color(0xFF3F8CFF),
                       backgroundColor: Colors.white24,
                     ),
                   ),
@@ -1293,7 +1547,7 @@ class _EpisodeCard extends StatelessWidget {
           ),
         ),
       ),
-      const SizedBox(height: 7),
+      SizedBox(height: 7),
       Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1302,8 +1556,8 @@ class _EpisodeCard extends StatelessWidget {
               '${episode.episodeNumber}. ${episode.displayName}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurface,
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
               ),
@@ -1317,21 +1571,35 @@ class _EpisodeCard extends StatelessWidget {
               alignment: Alignment.topRight,
               tooltip: '剧集操作',
               onPressed: onMore,
-              icon: const Icon(Icons.more_horiz, size: 21),
-              color: Colors.white60,
+              icon: Icon(Icons.more_horiz, size: 21),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
         ],
       ),
-      if (versions.length > 1)
+      if (versions.isEmpty)
+        AppText(
+          '不可用',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
+          ),
+        )
+      else if (versions.length > 1)
         AppText(
           '${versions.length} 个版本',
-          style: const TextStyle(color: Colors.white54, fontSize: 12),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
+          ),
         )
       else if (progress != null)
         AppText(
           '看到 ${_clock(progress!.position)}',
-          style: const TextStyle(color: Colors.white54, fontSize: 12),
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+            fontSize: 12,
+          ),
         ),
       if (danmaku?.ref != null)
         Tooltip(
@@ -1340,7 +1608,7 @@ class _EpisodeCard extends StatelessWidget {
             '弹幕：${danmaku!.ref!.episodeTitle ?? '第 ${episode.episodeNumber} 集'}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Color(0xFF7CB5FF), fontSize: 12),
+            style: TextStyle(color: Color(0xFF7CB5FF), fontSize: 12),
           ),
         ),
     ],
@@ -1354,27 +1622,30 @@ class _DuplicateNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(24, 10, 24, 0),
+    padding: EdgeInsets.fromLTRB(24, 10, 24, 0),
     child: Material(
-      color: const Color(0xFF292A34),
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
       borderRadius: BorderRadius.circular(4),
       child: InkWell(
         borderRadius: BorderRadius.circular(4),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.copy_all_outlined,
                 size: 19,
-                color: Colors.white60,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
-              const SizedBox(width: 10),
+              SizedBox(width: 10),
               Expanded(child: AppText('检测到 $count 集存在重复版本未展开显示')),
-              const AppText('查看解决办法', style: TextStyle(color: Colors.white70)),
-              const SizedBox(width: 3),
-              const Icon(Icons.chevron_right, color: Colors.white60),
+
+              SizedBox(width: 3),
+              Icon(
+                Icons.chevron_right,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ],
           ),
         ),
@@ -1405,7 +1676,7 @@ class _VersionSheetState extends State<_VersionSheet> {
   @override
   Widget build(BuildContext context) => SafeArea(
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(20, 4, 20, 18),
+      padding: EdgeInsets.fromLTRB(20, 4, 20, 18),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1418,7 +1689,7 @@ class _VersionSheetState extends State<_VersionSheet> {
               context,
             ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: 10),
           for (final file in widget.versions)
             RadioListTile<MediaFile>(
               value: file,
@@ -1441,15 +1712,15 @@ class _VersionSheetState extends State<_VersionSheet> {
             contentPadding: EdgeInsets.zero,
             controlAffinity: ListTileControlAffinity.leading,
             onChanged: (value) => setState(() => _remember = value ?? false),
-            title: const AppText('此剧优先使用该来源'),
+            title: AppText('此剧优先使用该来源'),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: 8),
           FilledButton.icon(
-            style: FilledButton.styleFrom(minimumSize: const Size(0, 52)),
+            style: FilledButton.styleFrom(minimumSize: Size(0, 52)),
             onPressed: () =>
                 Navigator.pop(context, _VersionChoice(_selected, _remember)),
-            icon: const Icon(Icons.play_arrow_rounded),
-            label: const AppText('播放'),
+            icon: Icon(Icons.play_arrow_rounded),
+            label: AppText('播放'),
           ),
         ],
       ),

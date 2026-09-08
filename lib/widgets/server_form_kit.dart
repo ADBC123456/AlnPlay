@@ -198,7 +198,7 @@ class ServerResultBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final color = success ? const Color(0xFF4CAF50) : theme.colorScheme.error;
+    final color = success ? theme.colorScheme.primary : theme.colorScheme.error;
     return Container(
       margin: margin ?? const EdgeInsets.only(top: 12),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -212,17 +212,13 @@ class ServerResultBanner extends StatelessWidget {
           Icon(
             success ? Icons.check_circle : Icons.error_outline,
             size: 18,
-            color: success ? const Color(0xFF81C995) : color,
+            color: color,
           ),
           const SizedBox(width: 8),
           Expanded(
             child: AppText(
               message,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.35,
-                color: success ? const Color(0xFF81C995) : color,
-              ),
+              style: TextStyle(fontSize: 13, height: 1.35, color: color),
             ),
           ),
         ],

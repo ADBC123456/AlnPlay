@@ -767,13 +767,22 @@ class _SmbScreenState extends State<SmbScreen> {
 
   Widget _serverList(BuildContext context) {
     if (_servers.isEmpty && _discovered.isEmpty && !_scanning) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.dns_outlined, size: 48, color: Colors.white38),
-            SizedBox(height: 12),
-            AppText('Nothing yet', style: TextStyle(color: Colors.white54)),
+            Icon(
+              Icons.dns_outlined,
+              size: 48,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            AppText(
+              'Nothing yet',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
           ],
         ),
       );

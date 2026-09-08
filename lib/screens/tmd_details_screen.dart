@@ -632,9 +632,12 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
         ],
       ),
       const SizedBox(height: 4),
-      const AppText(
+      AppText(
         'SDR only — no Dolby Vision / HDR (Media3 handles those)',
-        style: TextStyle(fontSize: 11, color: Colors.white54),
+        style: TextStyle(
+          fontSize: 11,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
         textAlign: TextAlign.center,
       ),
     ];
@@ -1701,8 +1704,12 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
           colors: [colorScheme.primaryContainer, colorScheme.tertiaryContainer],
         ),
       ),
-      child: const Center(
-        child: Icon(Icons.movie_filter, size: 48, color: Colors.white24),
+      child: Center(
+        child: Icon(
+          Icons.movie_filter,
+          size: 48,
+          color: colorScheme.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -1728,7 +1735,6 @@ class _RatingBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (rating <= 0) return const SizedBox.shrink();
-    final colorScheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -1742,8 +1748,8 @@ class _RatingBadge extends StatelessWidget {
           const SizedBox(width: 4),
           AppText(
             rating.toStringAsFixed(1),
-            style: TextStyle(
-              color: colorScheme.onSurface,
+            style: const TextStyle(
+              color: Colors.white,
               fontWeight: FontWeight.w600,
               fontSize: 13,
             ),

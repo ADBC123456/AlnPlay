@@ -3,13 +3,13 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../app.dart' show appRouteObserver;
 import '../library/models/library_models.dart';
 import '../library/repository/library_repository.dart';
 import '../library/scanner/library_scanner.dart';
 import '../library/unified_library_service.dart';
-import '../library/title_playback_preferences.dart';
 import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/file_browser.dart';
@@ -37,13 +37,27 @@ import 'webdav_screen.dart';
 import '../l10n/app_localizations.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, this.refreshTick, this.sourcesOnly = false});
+  const HomeScreen({
+    super.key,
+    this.refreshTick,
+    this.searchActive = false,
+    this.onSearchDismissed,
+    this.sourcesOnly = false,
+  });
 
   final bool sourcesOnly;
 
   /// Notifies the screen that it became visible again (e.g. the Library tab
   /// was re-selected) so it can reload its continue-watching list.
   final Listenable? refreshTick;
+
+  /// Controlled by the root Dock. Search stays a contextual library action
+  /// instead of becoming a fourth navigation destination.
+  final bool searchActive;
+
+  /// Closes the contextual search and lets the root restore the tab that was
+  /// visible before search opened.
+  final VoidCallback? onSearchDismissed;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -55,10 +69,10 @@ class _HomeScreenState extends State<HomeScreen>
       TextEditingController();
   Timer? _librarySearchDebounce;
   String _librarySearch = '';
-  bool _searchVisible = false;
   bool _sortByName = false;
   bool _refreshing = false;
   bool _openingRecent = false;
+  bool _keyboardWasVisible = false;
 
   /// "Continue watching": videos with a saved resume position, most recently
   /// played first (persisted via [ContinueWatchingStore]).
@@ -132,6 +146,29 @@ class _HomeScreenState extends State<HomeScreen>
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.refreshTick != widget.refreshTick) {
+      oldWidget.refreshTick?.removeListener(_loadLibrary);
+      widget.refreshTick?.addListener(_loadLibrary);
+    }
+    if (oldWidget.searchActive && !widget.searchActive) {
+      _librarySearchDebounce?.cancel();
+      _librarySearchController.clear();
+      _librarySearch = '';
+    }
+    if (!oldWidget.searchActive && widget.searchActive) {
+      _keyboardWasVisible = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !widget.searchActive) return;
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(0);
+        }
+      });
+    }
+  }
+
   /// A route pushed above Home popped (file browser, player, "Open with"), so
   /// resume positions may have changed — refresh the continue-watching list.
   @override
@@ -146,6 +183,18 @@ class _HomeScreenState extends State<HomeScreen>
     if (state == AppLifecycleState.resumed) {
       _loadLibrary();
     }
+  }
+
+  @override
+  void didChangeMetrics() {
+    if (!mounted) return;
+    final keyboardVisible = View.of(context).viewInsets.bottom > 0;
+    if (widget.searchActive && _keyboardWasVisible && !keyboardVisible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.searchActive) widget.onSearchDismissed?.call();
+      });
+    }
+    _keyboardWasVisible = keyboardVisible;
   }
 
   Future<void> _loadLibrary() async {
@@ -456,14 +505,6 @@ class _HomeScreenState extends State<HomeScreen>
         )).withMetadataContext(item.metadata);
       }
       if (!mounted) return;
-      if (item.title != null && item.file != null) {
-        await TitlePlaybackPreferences.save(
-          titleId: item.title!.id,
-          lastPlayedFileId: item.file!.id,
-          lastPlayedEpisodeId: item.episode?.id,
-        );
-      }
-      if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(builder: (_) => PlayerScreen(video: video)),
       );
@@ -632,229 +673,288 @@ class _HomeScreenState extends State<HomeScreen>
     final failedScans = _unifiedLibrary.progressByRoot.values
         .where((p) => p.state == ScanState.failed)
         .toList();
+    final topInset = MediaQuery.paddingOf(context).top;
     return Scaffold(
+      // The root search field floats over this screen. Let the keyboard cover
+      // the lower shelves instead of relaying out the whole library.
+      resizeToAvoidBottomInset: false,
       body: TvOverscan(
-        child: CustomScrollView(
-          key: PageStorageKey(
-            widget.sourcesOnly ? 'sources-home' : 'media-home',
-          ),
-          controller: _scrollController,
-          slivers: [
-            SliverAppBar(
-              pinned: true,
-              titleSpacing: 16,
-              title: Text(
-                widget.sourcesOnly
-                    ? context.tr('Source library')
-                    : 'DreamPlayer',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+        child: Stack(
+          children: [
+            CustomScrollView(
+              key: PageStorageKey(
+                widget.sourcesOnly ? 'sources-home' : 'media-home',
               ),
-              actions: [
-                if (!widget.sourcesOnly)
-                  IconButton(
-                    tooltip: context.tr('Search'),
-                    icon: const Icon(Icons.search),
-                    onPressed: () => setState(() {
-                      _searchVisible = !_searchVisible;
-                      if (!_searchVisible) {
-                        _librarySearchDebounce?.cancel();
-                        _librarySearchController.clear();
-                        _librarySearch = '';
-                      }
-                    }),
-                  ),
-                if (!widget.sourcesOnly)
-                  PopupMenuButton<bool>(
-                    tooltip: context.tr('Sort'),
-                    icon: const Icon(Icons.sort),
-                    initialValue: _sortByName,
-                    onSelected: (value) => setState(() => _sortByName = value),
-                    itemBuilder: (_) => [
-                      CheckedPopupMenuItem(
-                        value: false,
-                        checked: !_sortByName,
-                        child: AppText('Recently added'),
-                      ),
-                      CheckedPopupMenuItem(
-                        value: true,
-                        checked: _sortByName,
-                        child: AppText('Title'),
-                      ),
-                    ],
-                  ),
-                IconButton(
-                  tooltip: context.tr('Refresh'),
-                  onPressed: _refreshing || activeScans.isNotEmpty
-                      ? null
-                      : widget.sourcesOnly
-                      ? _refreshSources
-                      : _refreshHome,
-                  icon: _refreshing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+              controller: _scrollController,
+              slivers: [
+                SliverAppBar(
+                  pinned: true,
+                  titleSpacing: 16,
+                  title: widget.sourcesOnly
+                      ? Text(
+                          context.tr('Source library'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         )
-                      : const Icon(Icons.refresh),
+                      : Row(
+                          children: [
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(9),
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(2),
+                                child: SvgPicture.asset(
+                                  'assets/alnplay_logo.svg',
+                                  width: 30,
+                                  height: 30,
+                                  excludeFromSemantics: true,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Expanded(
+                              child: Text(
+                                'AlnPlay',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                  actions: [
+                    if (!widget.sourcesOnly)
+                      PopupMenuButton<bool>(
+                        tooltip: context.tr('Sort'),
+                        icon: const Icon(Icons.sort),
+                        initialValue: _sortByName,
+                        onSelected: (value) =>
+                            setState(() => _sortByName = value),
+                        itemBuilder: (_) => [
+                          CheckedPopupMenuItem(
+                            value: false,
+                            checked: !_sortByName,
+                            child: AppText('Recently added'),
+                          ),
+                          CheckedPopupMenuItem(
+                            value: true,
+                            checked: _sortByName,
+                            child: AppText('Title'),
+                          ),
+                        ],
+                      ),
+                    IconButton(
+                      tooltip: context.tr('Refresh'),
+                      onPressed: _refreshing || activeScans.isNotEmpty
+                          ? null
+                          : widget.sourcesOnly
+                          ? _refreshSources
+                          : _refreshHome,
+                      icon: _refreshing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            if (_searchVisible && !widget.sourcesOnly)
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                sliver: SliverToBoxAdapter(
-                  child: TvTextField(
-                    controller: _librarySearchController,
-                    autofocus: true,
-                    onChanged: (value) {
-                      _librarySearchDebounce?.cancel();
-                      _librarySearchDebounce = Timer(
-                        const Duration(milliseconds: 250),
-                        () {
-                          if (mounted) setState(() => _librarySearch = value);
-                        },
-                      );
-                    },
-                    decoration: InputDecoration(
-                      labelText: context.tr('Search titles, episodes or files'),
-                      prefixIcon: const Icon(Icons.search),
+                if (widget.searchActive && !widget.sourcesOnly)
+                  const SliverToBoxAdapter(child: SizedBox(height: 82)),
+                if (!widget.sourcesOnly &&
+                    (activeScans.isNotEmpty || _openingRecent))
+                  SliverToBoxAdapter(
+                    child: LinearProgressIndicator(
+                      semanticsLabel: 'Scanning library',
+                      minHeight: 3,
                     ),
                   ),
-                ),
-              ),
-            if (!widget.sourcesOnly &&
-                (activeScans.isNotEmpty || _openingRecent))
-              SliverToBoxAdapter(
-                child: LinearProgressIndicator(
-                  semanticsLabel: 'Scanning library',
-                  minHeight: 3,
-                ),
-              ),
-            if (!widget.sourcesOnly && activeScans.isNotEmpty)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: AppText(
-                          '正在扫描 · 已发现 ${activeScans.fold<int>(0, (sum, item) => sum + item.discoveredFiles)} 个文件',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
+                if (!widget.sourcesOnly && activeScans.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: AppText(
+                              '正在扫描 · 已发现 ${activeScans.fold<int>(0, (sum, item) => sum + item.discoveredFiles)} 个文件',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () {
+                              for (final progress in activeScans) {
+                                _unifiedLibrary.cancel(progress.rootId);
+                              }
+                            },
+                            child: const AppText('取消'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (!widget.sourcesOnly && failedScans.isNotEmpty)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                      child: Material(
+                        color: theme.colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(12),
+                        child: ListTile(
+                          leading: const Icon(Icons.sync_problem),
+                          title: AppText('${failedScans.length} 个来源扫描失败'),
+                          subtitle: const AppText('旧索引已保留，可单独重试失败来源'),
+                          trailing: TextButton(
+                            onPressed: () => _retryFailedScans(failedScans),
+                            child: const AppText('重试'),
                           ),
                         ),
                       ),
-                      TextButton(
-                        onPressed: () {
-                          for (final progress in activeScans) {
-                            _unifiedLibrary.cancel(progress.rootId);
-                          }
-                        },
-                        child: const AppText('取消'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            if (!widget.sourcesOnly && failedScans.isNotEmpty)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Material(
-                    color: theme.colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(12),
-                    child: ListTile(
-                      leading: const Icon(Icons.sync_problem),
-                      title: AppText('${failedScans.length} 个来源扫描失败'),
-                      subtitle: const AppText('旧索引已保留，可单独重试失败来源'),
-                      trailing: TextButton(
-                        onPressed: () => _retryFailedScans(failedScans),
-                        child: const AppText('重试'),
-                      ),
                     ),
                   ),
-                ),
-              ),
 
-            if (widget.sourcesOnly) ...[
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
-                  child: AppText(
-                    'Saved servers',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: theme.colorScheme.primary,
-                      fontWeight: FontWeight.w700,
+                if (widget.sourcesOnly) ...[
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                      child: AppText(
+                        'Saved servers',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (_savedSources.isEmpty)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: _EmptySources(onAdd: _showAddMenu),
+                    )
+                  else
+                    SliverList.builder(
+                      itemCount: _savedSources.length,
+                      itemBuilder: (context, index) {
+                        final source = _savedSources[index];
+                        return SavedSourceTile(
+                          key: ValueKey(source.id),
+                          name: source.name,
+                          subtitle: source.subtitle,
+                          icon: source.icon,
+                          onTap: () => _openSavedSource(source),
+                          onLongPress: source.folder == null
+                              ? null
+                              : () => _removeFolder(source.folder!),
+                        );
+                      },
+                    ),
+                ] else ...[
+                  if (_librarySearch.trim().isEmpty)
+                    _shelf(
+                      label: 'Recently watched',
+                      count: recent.length,
+                      recent: true,
+                      builder: (context, index) => RecentLibraryCard(
+                        key: ValueKey('recent:${recent[index].key}'),
+                        item: recent[index],
+                        onTap: () => _playRecent(recent[index]),
+                        onRemove: () => _removeVideo(recent[index].entry),
+                      ),
+                    ),
+                  for (final kind in MediaTitleKind.values)
+                    _posterShelf(
+                      kind,
+                      titles.where((title) => title.kind == kind).toList(),
+                    ),
+                  if (titles.isEmpty && _librarySearch.trim().isNotEmpty)
+                    const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: AppText('No matching titles'),
+                      ),
+                    ),
+                  if (snapshot.titles.isEmpty && _librarySearch.trim().isEmpty)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          children: [
+                            const _EmptyLibrary(),
+                            FilledButton.icon(
+                              onPressed: _showAddMenu,
+                              icon: const Icon(Icons.add),
+                              label: const AppText('Add a source'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+                SliverToBoxAdapter(
+                  child: SizedBox(
+                    height: MediaQuery.paddingOf(context).bottom + 32,
+                  ),
+                ),
+              ],
+            ),
+            if (widget.searchActive && !widget.sourcesOnly)
+              Positioned(
+                top: topInset + kToolbarHeight + 8,
+                left: 16,
+                right: 16,
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 720),
+                    child: Material(
+                      key: const Key('library-search-overlay'),
+                      color: theme.colorScheme.surface.withValues(alpha: 0.97),
+                      elevation: 8,
+                      shadowColor: Colors.black.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(18),
+                      clipBehavior: Clip.antiAlias,
+                      child: TvTextField(
+                        key: const Key('library-search-field'),
+                        controller: _librarySearchController,
+                        autofocus: true,
+                        textInputAction: TextInputAction.search,
+                        onChanged: (value) {
+                          _librarySearchDebounce?.cancel();
+                          _librarySearchDebounce = Timer(
+                            const Duration(milliseconds: 250),
+                            () {
+                              if (mounted) {
+                                setState(() => _librarySearch = value);
+                              }
+                            },
+                          );
+                        },
+                        decoration: InputDecoration(
+                          hintText: context.tr(
+                            'Search titles, episodes or files',
+                          ),
+                          prefixIcon: const Icon(Icons.search_rounded),
+                          suffixIcon: IconButton(
+                            key: const Key('library-search-close'),
+                            tooltip: context.tr('Close'),
+                            onPressed: widget.onSearchDismissed,
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                          filled: true,
+                          fillColor: Colors.transparent,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-              if (_savedSources.isEmpty)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: _EmptySources(onAdd: _showAddMenu),
-                )
-              else
-                SliverList.builder(
-                  itemCount: _savedSources.length,
-                  itemBuilder: (context, index) {
-                    final source = _savedSources[index];
-                    return SavedSourceTile(
-                      key: ValueKey(source.id),
-                      name: source.name,
-                      subtitle: source.subtitle,
-                      icon: source.icon,
-                      onTap: () => _openSavedSource(source),
-                      onLongPress: source.folder == null
-                          ? null
-                          : () => _removeFolder(source.folder!),
-                    );
-                  },
-                ),
-            ] else ...[
-              if (_librarySearch.trim().isEmpty)
-                _shelf(
-                  label: 'Recently watched',
-                  count: recent.length,
-                  recent: true,
-                  builder: (context, index) => RecentLibraryCard(
-                    key: ValueKey('recent:${recent[index].key}'),
-                    item: recent[index],
-                    onTap: () => _playRecent(recent[index]),
-                    onRemove: () => _removeVideo(recent[index].entry),
-                  ),
-                ),
-              for (final kind in MediaTitleKind.values)
-                _posterShelf(
-                  kind,
-                  titles.where((title) => title.kind == kind).toList(),
-                ),
-              if (titles.isEmpty && _librarySearch.trim().isNotEmpty)
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: AppText('No matching titles'),
-                  ),
-                ),
-              if (snapshot.titles.isEmpty && _librarySearch.trim().isEmpty)
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      children: [
-                        const _EmptyLibrary(),
-                        FilledButton.icon(
-                          onPressed: _showAddMenu,
-                          icon: const Icon(Icons.add),
-                          label: const AppText('Add a source'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-            const SliverToBoxAdapter(child: SizedBox(height: 32)),
           ],
         ),
       ),
@@ -919,8 +1019,12 @@ class _HomeScreenState extends State<HomeScreen>
       child: LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.maxWidth;
-          // Four complete posters on phones; keep comfortable sizes on tablets.
-          final columns = width < 600 ? 4 : (width / 140).floor().clamp(4, 10);
+          // Keep posters readable in narrow split windows, then use the extra
+          // room on tablets to show more titles without shrinking phone cards.
+          final minimumPosterWidth = width < 600 ? 88.0 : 132.0;
+          final columns = ((width - 24) / (minimumPosterWidth + 8))
+              .floor()
+              .clamp(1, 10);
           final itemWidth = recent
               ? (width * .78).clamp(220.0, 440.0)
               : (width - 32 - (columns - 1) * 8) / columns;
@@ -964,9 +1068,9 @@ class _HomeScreenState extends State<HomeScreen>
                             ).colorScheme.onSurfaceVariant,
                           ),
                         ),
-                        const Icon(
+                        Icon(
                           Icons.chevron_right,
-                          color: Colors.white38,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                           size: 22,
                         ),
                       ],
@@ -1024,9 +1128,10 @@ class _HomeScreenState extends State<HomeScreen>
             builder: (context, constraints) {
               final columns = recent
                   ? (constraints.maxWidth / 320).floor().clamp(1, 4)
-                  : constraints.maxWidth < 600
-                  ? 4
-                  : (constraints.maxWidth / 140).floor().clamp(4, 10);
+                  : ((constraints.maxWidth - 24) /
+                            ((constraints.maxWidth < 600 ? 88.0 : 132.0) + 8))
+                        .floor()
+                        .clamp(1, 10);
               final width =
                   (constraints.maxWidth - 32 - 8 * (columns - 1)) / columns;
               return GridView.builder(

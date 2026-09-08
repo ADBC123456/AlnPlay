@@ -12,7 +12,7 @@ void main() {
     const Size(800, 360),
   ]) {
     testWidgets(
-      'populated shelves fit $size with large text and four phone posters',
+      'populated shelves keep readable posters at $size with large text',
       (tester) async {
         tester.view.physicalSize = size;
         tester.view.devicePixelRatio = 1;
@@ -22,7 +22,7 @@ void main() {
         final library = UnifiedLibraryService.instance;
         final previous = library.snapshot;
         addTearDown(() => library.snapshot = previous);
-        await tester.pumpWidget(const DreamPlayerApp());
+        await tester.pumpWidget(const AlnPlayApp());
         await tester.pumpAndSettle();
         library.snapshot = LibrarySnapshot(
           titles: {
@@ -56,11 +56,15 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
         if (size.width < 600) {
+          final visibleColumns = ((size.width - 24) / (88 + 8)).floor();
           final first = tester.getRect(find.byKey(const ValueKey('tv0')));
-          final fourth = tester.getRect(find.byKey(const ValueKey('tv3')));
-          expect(first.top, fourth.top);
+          final lastVisible = tester.getRect(
+            find.byKey(ValueKey('tv${visibleColumns - 1}')),
+          );
+          expect(first.top, lastVisible.top);
           expect(first.left, greaterThanOrEqualTo(16));
-          expect(fourth.right, lessThanOrEqualTo(size.width - 15));
+          expect(lastVisible.right, lessThanOrEqualTo(size.width - 15));
+          expect(first.width, greaterThanOrEqualTo(88));
         }
         await tester.tap(find.text('电视剧'));
         await tester.pumpAndSettle();

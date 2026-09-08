@@ -45,6 +45,9 @@ object PlaybackManager {
     /// Guards redundant notification rebuilds (position ticker emits ~1/s).
     private var lastNotifyKey: String? = null
     private var lastNotifyAtMs = 0L
+    private var lastMetadataKey: Pair<String?, Long>? = null
+    private var serviceStarted = false
+    private var lastProgressSyncAtMs = 0L
 
     val sessionCompatToken: MediaSessionCompat.Token?
         get() = session?.sessionToken
@@ -56,7 +59,7 @@ object PlaybackManager {
     fun attach(context: Context, exoPlayer: ExoPlayer) {
         player = exoPlayer
         if (session == null) {
-            session = MediaSessionCompat(context.applicationContext, "DreamPlayer").apply {
+            session = MediaSessionCompat(context.applicationContext, "AlnPlay").apply {
                 setCallback(object : MediaSessionCompat.Callback() {
                     override fun onPlay() {
                         player?.play()
@@ -98,12 +101,17 @@ object PlaybackManager {
      * Safe to call on every event: playback-state writes are cheap, and the
      * notification itself is only rebuilt when something visible changed.
      */
-    fun sync(context: Context) {
+    fun sync(context: Context, progressOnly: Boolean = false) {
         val p = player ?: return
         val s = session ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        // The UI clock ticks at 4 Hz. System controls extrapolate position;
+        // keep their progress at 1 Hz, but deliver actions/seeks immediately.
+        if (progressOnly && now - lastProgressSyncAtMs < 1000) return
+        lastProgressSyncAtMs = now
         // Reactivate after a transient IDLE (setMediaItem resets the player
         // to IDLE between opens) or an earlier stop().
-        s.isActive = true
+        if (!s.isActive) s.isActive = true
         when {
             p.playbackState == Player.STATE_IDLE -> {
                 stop(context)
@@ -139,20 +147,26 @@ object PlaybackManager {
                 .setState(stateAction, p.currentPosition, if (playing) p.playbackParameters.speed else 0f)
                 .build(),
         )
-        s.setMetadata(
+        val metadataKey = title to duration
+        if (metadataKey != lastMetadataKey) {
+          s.setMetadata(
             MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title ?: "DreamPlayer")
-                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "DreamPlayer")
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title ?: "AlnPlay")
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "AlnPlay")
                 .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
                 .build(),
-        )
+          )
+          lastMetadataKey = metadataKey
+        }
 
-        ContextCompat.startForegroundService(context, Intent(context, PlaybackService::class.java))
+        if (!serviceStarted) {
+            ContextCompat.startForegroundService(context, Intent(context, PlaybackService::class.java))
+            serviceStarted = true
+        }
 
         // Rebuild the notification when a visible aspect changed, or once a
         // second while playing so the progress bar tracks playback. The
         // lockscreen extrapolates position from state.speed between updates.
-        val now = android.os.SystemClock.elapsedRealtime()
         val key = "${p.playbackState}|$playing|$title"
         if (key != lastNotifyKey || (playing && now - lastNotifyAtMs >= 1000)) {
             lastNotifyKey = key
@@ -164,6 +178,9 @@ object PlaybackManager {
     /// User tapped Close (or dismissed a paused notification): stop playback,
     /// drop the foreground UI, keep the player itself alive for the screen.
     fun stop(context: Context) {
+        serviceStarted = false
+        lastMetadataKey = null
+        lastProgressSyncAtMs = 0L
         lastNotifyKey = null
         context.getSystemService(NotificationManager::class.java)?.cancel(NOTIF_ID)
         context.stopService(Intent(context, PlaybackService::class.java))
@@ -233,8 +250,8 @@ object PlaybackManager {
         // PendingIntents still route through it into the player.
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_play)
-            .setContentTitle(title ?: "DreamPlayer")
-            .setContentText("DreamPlayer")
+            .setContentTitle(title ?: "AlnPlay")
+            .setContentText("AlnPlay")
             .setContentIntent(contentPi)
             .setOnlyAlertOnce(true)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)

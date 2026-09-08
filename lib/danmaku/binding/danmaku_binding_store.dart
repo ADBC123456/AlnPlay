@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../scraper/scrape_state.dart';
@@ -67,6 +68,13 @@ class DanmakuBindingStore {
   static const _prefsKey = 'dreamplayer.danmakuBindings.v1';
   static const _schemaVersion = 1;
   static Future<void> _writeTail = Future<void>.value();
+
+  /// Widget tests use a fresh FakeAsync zone for each test. Do not retain a
+  /// completed write future scheduled in a previous test's discarded zone.
+  @visibleForTesting
+  static void resetWriteQueueForTesting() {
+    _writeTail = Future<void>.value();
+  }
 
   static Future<DanmakuBinding?> load({
     required String sourceId,

@@ -1293,8 +1293,8 @@ final class AvPlayerView: NSObject, FlutterPlatformView, FlutterStreamHandler {
         }
         let playing = engine.state == .playing
         let info: [String: Any] = [
-            MPMediaItemPropertyTitle: mediaTitle ?? "DreamPlayer",
-            MPMediaItemPropertyArtist: "DreamPlayer",
+            MPMediaItemPropertyTitle: mediaTitle ?? "AlnPlay",
+            MPMediaItemPropertyArtist: "AlnPlay",
             MPMediaItemPropertyPlaybackDuration: max(0, engine.duration),
             MPNowPlayingInfoPropertyElapsedPlaybackTime: max(0, engine.currentTime),
             MPNowPlayingInfoPropertyPlaybackRate: playing ? 1.0 : 0.0,

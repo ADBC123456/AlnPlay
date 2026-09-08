@@ -295,7 +295,7 @@ class _UpnpScreenState extends State<UpnpScreen> {
             ),
             const SizedBox(height: 8),
             AppText(
-              '1. Allow Local Network when prompted (Settings → Privacy & Security → Local Network → DreamPlayer).\n'
+              '1. Allow Local Network when prompted (Settings → Privacy & Security → Local Network → AlnPlay).\n'
               '2. iPad and the server must be on the same Wi-Fi.\n'
               '3. Tap Discover again after granting.',
               textAlign: TextAlign.center,

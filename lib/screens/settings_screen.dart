@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/auto_play_store.dart';
@@ -14,7 +12,6 @@ import '../services/opensubtitles_client.dart';
 import '../services/subtitle_encodings.dart';
 import '../services/subtitle_languages.dart';
 import '../services/subtitle_prefs.dart';
-import '../services/support_links.dart';
 import '../config/simkl_keys.dart';
 import '../services/simkl_client.dart';
 import '../services/tmdb_client.dart';
@@ -22,7 +19,7 @@ import '../services/watched_store.dart';
 import '../utils/tv_helper.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_tile.dart';
-import 'licenses_screen.dart';
+import '../theme/theme_controller.dart';
 import 'danmaku_settings_screen.dart';
 import '../l10n/app_localizations.dart';
 
@@ -59,6 +56,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _badgeVideoCodec = false;
   bool _badgeSpatialAudio = true;
   bool _badgeServerTranscode = true;
+
+  static String _themeLabel(ThemeMode mode) => switch (mode) {
+    ThemeMode.system => 'Follow system',
+    ThemeMode.light => 'Light',
+    ThemeMode.dark => 'Dark',
+  };
+
+  Future<void> _pickTheme() async {
+    final controller = AppThemeController.instance;
+    final picked = await showDialog<ThemeMode>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const AppText('Theme'),
+        children: [
+          RadioGroup<ThemeMode>(
+            groupValue: controller.themeMode,
+            onChanged: (value) => Navigator.pop(dialogContext, value),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final mode in ThemeMode.values)
+                  RadioListTile<ThemeMode>(
+                    value: mode,
+                    title: AppText(_themeLabel(mode)),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    try {
+      await controller.setThemeMode(picked);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: AppText('Could not save theme preference')),
+      );
+    }
+  }
 
   Future<void> _pickAppLanguage() async {
     final current = AppLocaleController.instance.locale.languageCode;
@@ -320,9 +358,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               const SizedBox(height: 8),
-              const AppText(
+              AppText(
                 'Free account = 20/day (anonymous = 5/day). Create at opensubtitles.com',
-                style: TextStyle(color: Colors.white54, fontSize: 11),
+                style: TextStyle(
+                  color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  fontSize: 11,
+                ),
               ),
             ],
           ),
@@ -379,9 +420,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const AppText(
+              AppText(
                 'Get a free key at themoviedb.org/settings/api',
-                style: TextStyle(color: Colors.white54, fontSize: 12),
+                style: TextStyle(
+                  color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  fontSize: 12,
+                ),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -533,9 +577,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final isTv = isTvMode(context);
 
     return SafeArea(
+      bottom: false,
       child: TvOverscan(
         child: ListView(
-          padding: const EdgeInsets.only(bottom: 24),
+          padding: EdgeInsets.only(
+            bottom: 24 + MediaQuery.paddingOf(context).bottom,
+          ),
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -559,33 +606,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
               child: AppText(
-                'Support',
+                'Appearance',
                 style: theme.textTheme.titleSmall?.copyWith(
                   color: theme.colorScheme.primary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
             ),
-            for (final option in supportOptions)
-              TvTile(
-                leading: Icon(option.icon),
-                title: AppText(option.title),
-                subtitle: AppText(option.subtitle),
-                trailing: const Icon(Icons.open_in_new, size: 18),
-                onTap: () async {
-                  try {
-                    await openSupportUrl(option.url);
-                  } on PlatformException {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: AppText('Could not open this link'),
-                        ),
-                      );
-                    }
-                  }
-                },
+            ListenableBuilder(
+              listenable: AppThemeController.instance,
+              builder: (context, _) => TvTile(
+                leading: const Icon(Icons.brightness_6_outlined),
+                title: const AppText('Theme'),
+                subtitle: AppText(
+                  _themeLabel(AppThemeController.instance.themeMode),
+                ),
+                onTap: _pickTheme,
               ),
+            ),
             const Divider(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -1070,81 +1108,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: _connectSimkl,
                 ),
             ],
-            const Divider(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: AppText(
-                'About',
-                style: theme.textTheme.titleSmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            TvTile(
-              leading: const Icon(Icons.memory),
-              title: const AppText('Engine'),
-              subtitle: AppText(
-                defaultTargetPlatform == TargetPlatform.iOS
-                    ? 'AetherEngine (AVPlayer + FFmpeg)'
-                    : 'ExoPlayer (Media3) + FFmpeg',
-              ),
-            ),
-            TvTile(
-              leading: const Icon(Icons.info_outline),
-              title: const AppText('Version'),
-              subtitle: FutureBuilder<String>(
-                future: _loadVersion(),
-                builder: (context, snapshot) =>
-                    AppText(snapshot.hasData ? snapshot.data! : '…'),
-              ),
-            ),
-            TvTile(
-              leading: const Icon(Icons.gavel),
-              title: const AppText('Open-source licenses'),
-              subtitle: const AppText('GNU GPL v3.0 and third-party notices'),
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const LicensesScreen(),
-                  ),
-                );
-              },
-            ),
-            const Divider(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-              child: Column(
-                children: [
-                  AppText(
-                    'Made with ❤️ by Mangesh Ghodke',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  AppText(
-                    'DreamPlayer',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.outline,
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
       ),
     );
-  }
-
-  Future<String> _loadVersion() async {
-    try {
-      final info = await PackageInfo.fromPlatform();
-      return info.version;
-    } on Exception {
-      return '0.0.7';
-    }
   }
 
   String _formatWhen(DateTime t) {
@@ -1322,8 +1289,8 @@ class _BadgeToggle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return SizedBox(
-      height: 40,
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 48),
       child: ListTile(
         dense: true,
         visualDensity: VisualDensity.compact,

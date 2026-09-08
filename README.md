@@ -1,15 +1,13 @@
-# DreamPlayer
+# AlnPlay
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/mangeshghodke/DreamPlayer/main/app_icon.png" width="200" alt="DreamPlayer icon">
+  <img src="assets/alnplay_app_icon.png" width="200" alt="AlnPlay icon">
 </p>
 
-[![License: GPLv3](https://img.shields.io/github/license/mangeshghodke/DreamPlayer?style=flat)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad%20%7C%20Android%20TV-blue)](https://github.com/mangeshghodke/DreamPlayer)
+[![License: GPLv3](https://img.shields.io/github/license/ADBC123456/AlnPlay?style=flat)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad%20%7C%20Android%20TV-blue)](https://github.com/ADBC123456/AlnPlay)
 [![Flutter](https://img.shields.io/badge/Flutter-3.44-46A6F2?logo=flutter&logoColor=white&color=46A6F2)](https://flutter.dev)
-[![iOS build](https://img.shields.io/github/actions/workflow/status/mangeshghodke/DreamPlayer/ios.yml?label=iOS%20build)](https://github.com/mangeshghodke/DreamPlayer/actions/workflows/ios.yml)
-[![Donate](https://img.shields.io/badge/Donate-Razorpay-2D8CF0)](https://rzp.io/rzp/cZ5afqVG)
-[![GitHub Sponsors](https://img.shields.io/badge/GitHub_Sponsors-Support-EA4AAA?logo=github&logoColor=white)](https://github.com/sponsors/mangeshghodke/)
+[![iOS build](https://img.shields.io/github/actions/workflow/status/ADBC123456/AlnPlay/ios.yml?label=iOS%20build)](https://github.com/ADBC123456/AlnPlay/actions/workflows/ios.yml)
 ![Vibe Coded](https://img.shields.io/badge/vibe--coded-100%25-8A2BE2)
 
 A cross-platform video player for **Android, iOS/iPad, and Android TV** — built for true Dolby Vision, HDR10/HDR10+, and lossless audio playback.
@@ -131,7 +129,7 @@ only talks to Media3-native `DataSource`s, and libmpv can't read `smb://`.
 
 ## Engines Used
 
-DreamPlayer is a video player app, but the actual video *engine* depends on
+AlnPlay is a video player app, but the actual video *engine* depends on
 your platform. Different platforms need different engines to do what we
 promise: **Dolby Vision + HDR10 passthrough to the panel, lossless audio
 decoding, and a stable 4K 60 fps picture on a phone.**
@@ -197,7 +195,7 @@ Documented in `AGENTS.md → Player engine choice` and `Playback research notes`
 
 ## Spatial Audio on Android
 
-DreamPlayer surfaces the **system Spatializer** (Android 13+,
+AlnPlay surfaces the **system Spatializer** (Android 13+,
 `AudioManager.getSpatializer()`) as a teal **"Spatial"** chip in the
 player top bar. When the chip is on, your phone is virtualizing the
 surround mix for your output device (stereo headphones, phone speaker,
@@ -210,7 +208,7 @@ the system reports:
 3. The currently-playing audio track is multichannel (≥ 6 channels for
    surround, ≥ 8 for Atmos).
 
-To enable spatial audio in DreamPlayer:
+To enable spatial audio in AlnPlay:
 
 1. **Connect headphones or a USB DAC.** Phone speakers don't get
    spatialized on most devices.
@@ -265,7 +263,7 @@ Center → AirPlay / Head-tracking, not from inside any third-party app.
 
 ## Download
 
-Prebuilt binaries are on the [Releases](https://github.com/mangeshghodke/DreamPlayer/releases) page.
+Prebuilt binaries are on the [Releases](https://github.com/ADBC123456/AlnPlay/releases) page.
 
 - **Android** — universal APK + per-architecture APKs (arm64, armv7, x86_64)
 - **iOS / iPadOS** — unsigned IPA; sideload with [SideStore](https://sidestore.io) or [AltStore](https://altstore.io)
@@ -273,7 +271,7 @@ Prebuilt binaries are on the [Releases](https://github.com/mangeshghodke/DreamPl
 ### Installing on iPhone / iPad
 
 1. Install [SideStore](https://sidestore.io) or [AltStore](https://altstore.io) on your device
-2. Download `DreamPlayer-*.ipa` from the [latest release](https://github.com/mangeshghodke/DreamPlayer/releases)
+2. Download `AlnPlay-*.ipa` from the [latest release](https://github.com/ADBC123456/AlnPlay/releases)
 3. Open SideStore/AltStore → **+** → select the IPA
 4. The 7-day signature auto-refreshes over Wi-Fi
 
@@ -295,12 +293,3 @@ flutter run --dart-define-from-file=.env
 ## License
 
 Copyright (C) 2026 Mangesh Ghodke. Released under the [GNU General Public License v3.0](LICENSE).
-
-## Support
-
-If DreamPlayer is useful to you, consider supporting the project:
-
-- [Razorpay](https://rzp.io/rzp/cZ5afqVG) — UPI, cards, or netbanking (India)
-- [GitHub Sponsors](https://github.com/sponsors/mangeshghodke/) — recurring support
-
-Both are also in the app under **Settings → Support**.

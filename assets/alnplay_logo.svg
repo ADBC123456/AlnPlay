@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <!-- 品牌主色彩定义 -->
+  <defs>
+    <linearGradient id="brandGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F2C59"/>
+      <stop offset="100%" stop-color="#1E40AF"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(40, 20)">
+    <!-- AP 极简流线型图标的主体路径 -->
+    <path d="M 120 340 
+             C 90 340 80 300 100 250 
+             L 165 90 
+             C 180 50 220 50 235 90 
+             C 255 140 250 190 195 190 
+             C 140 190 125 250 150 285 
+             C 165 305 190 300 205 275 
+             L 220 250" 
+          fill="none" 
+          stroke="url(#brandGradient)" 
+          stroke-width="26" 
+          stroke-linecap="round" 
+          stroke-linejoin="round" />
+
+    <!-- 播放按钮 (Play Triangle) -->
+    <path d="M 275 145 
+             L 325 175 
+             C 332 179 332 189 325 193 
+             L 275 223 
+             C 267 228 258 222 258 213 
+             L 258 155 
+             C 258 146 267 140 275 145 Z" 
+          fill="url(#brandGradient)" />
+  </g>
+</svg>

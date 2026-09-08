@@ -76,8 +76,11 @@ class LibraryArtwork extends StatelessWidget {
   Widget build(BuildContext context) {
     final placeholder = ColoredBox(
       color: Theme.of(context).colorScheme.surfaceContainerHighest,
-      child: const Center(
-        child: Icon(Icons.movie_outlined, color: Colors.white38),
+      child: Center(
+        child: Icon(
+          Icons.movie_outlined,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       ),
     );
     Widget fallback() => fallbackUrl == null || fallbackUrl == url
@@ -274,7 +277,7 @@ class RecentLibraryCard extends StatelessWidget {
                         child: LinearProgressIndicator(
                           value: progress,
                           minHeight: 3,
-                          color: Colors.blueAccent,
+                          color: Theme.of(context).colorScheme.onSurface,
                           backgroundColor: Colors.white24,
                         ),
                       ),

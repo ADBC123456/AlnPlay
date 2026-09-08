@@ -32,6 +32,7 @@ class TitlePlaybackPreferences {
     String? preferredSourceId,
     String? lastPlayedFileId,
     String? lastPlayedEpisodeId,
+    DateTime? playedAt,
   }) => _enqueue(() async {
     final prefs = await SharedPreferences.getInstance();
     final all = await _loadAll();
@@ -43,7 +44,8 @@ class TitlePlaybackPreferences {
       'preferredSourceId': ?preferredSourceId,
       'lastPlayedFileId': ?lastPlayedFileId,
       'lastPlayedEpisodeId': ?lastPlayedEpisodeId,
-      'lastPlayedAtMs': DateTime.now().millisecondsSinceEpoch,
+      if (lastPlayedFileId != null || lastPlayedEpisodeId != null)
+        'lastPlayedAtMs': (playedAt ?? DateTime.now()).millisecondsSinceEpoch,
     };
     await prefs.setString(_key, jsonEncode(all));
   });

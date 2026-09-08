@@ -351,11 +351,11 @@ class _FolderCardState extends State<FolderCard> {
                                 ],
                               ),
                             ),
-                            child: const Center(
+                            child: Center(
                               child: Icon(
                                 Icons.video_library_outlined,
                                 size: 40,
-                                color: Colors.white54,
+                                color: colorScheme.onSurfaceVariant,
                               ),
                             ),
                           ),

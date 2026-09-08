@@ -190,7 +190,7 @@ class DanmuApiSource implements DanmakuSource {
     await _send(
       method: 'GET',
       path: '/search/episodes',
-      query: const {'anime': 'DreamPlayer'},
+      query: const {'anime': 'AlnPlay'},
       cancelToken: cancelToken,
     );
   }

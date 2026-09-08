@@ -32,6 +32,7 @@ class DanmakuScrapeScreen extends StatefulWidget {
     this.enumerateFolder = true,
     this.openSeriesPickerOnReady = false,
     this.suggestedEpisode,
+    this.matchSingleEpisode = false,
   });
 
   final LibraryFolder folder;
@@ -52,6 +53,9 @@ class DanmakuScrapeScreen extends StatefulWidget {
 
   /// Episode to put at the top of the remote episode picker.
   final int? suggestedEpisode;
+
+  /// Match only the clicked episode (including its source versions).
+  final bool matchSingleEpisode;
 
   @override
   State<DanmakuScrapeScreen> createState() => _DanmakuScrapeScreenState();
@@ -139,7 +143,15 @@ class _DanmakuScrapeScreenState extends State<DanmakuScrapeScreen> {
         final normalized = _withNamespacedKey(video);
         byKey.putIfAbsent(normalized.key, () => normalized);
       }
-      final videos = byKey.values.toList();
+      final videos = byKey.values.toList()
+        ..sort((a, b) {
+          final season = (a.season ?? 0).compareTo(b.season ?? 0);
+          if (season != 0) return season;
+          final episode = (a.episode ?? 1 << 20).compareTo(
+            b.episode ?? 1 << 20,
+          );
+          return episode != 0 ? episode : a.fileName.compareTo(b.fileName);
+        });
       final scope = SeriesScope(
         sourceId: config.id,
         sourceBaseUrl: config.baseUrl,
@@ -220,6 +232,16 @@ class _DanmakuScrapeScreenState extends State<DanmakuScrapeScreen> {
     }
   }
 
+  Future<void> _chooseInitialSeries() async {
+    if (widget.matchSingleEpisode) {
+      final episodes = _state?.episodes;
+      if (episodes == null || episodes.isEmpty) return;
+      await _chooseEpisode(episodes.first);
+    } else {
+      await _chooseSeriesForBatch();
+    }
+  }
+
   Future<void> _chooseSeriesForBatch() async {
     final candidates = await _loadCandidates();
     if (candidates == null || !mounted) return;
@@ -233,55 +255,26 @@ class _DanmakuScrapeScreenState extends State<DanmakuScrapeScreen> {
       ),
     );
     if (selected == null || !mounted) return;
-    final numbered = _videos.map((video) => video.episode).whereType<int>();
-    final firstLocalEpisode = numbered.isEmpty
-        ? 1
-        : numbered.reduce((a, b) => a < b ? a : b);
-    final localAnchorEpisode = widget.suggestedEpisode ?? firstLocalEpisode;
-    final startChoice = await showModalBottomSheet<_EpisodeCandidate>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (context) => _EpisodeCandidateSheet(
-        title: 'Select first remote episode',
-        localLabel: 'Local episode $localAnchorEpisode',
-        anime: selected,
-        suggestedEpisode: localAnchorEpisode,
-      ),
-    );
-    if (startChoice == null || !mounted) return;
-    final remoteStart = startChoice.episode.episodeNumber;
-    if (remoteStart == null) {
+    // Whole-season scraping always anchors at the first real catalog episode,
+    // never at the playback resume episode. Missing local files keep their
+    // original episode numbers instead of shifting the rest of the season.
+    final numbered =
+        selected.episodes
+            .where(
+              (episode) =>
+                  !isDanmakuPromotionalEpisodeTitle(episode.episodeTitle) &&
+                  episode.episodeNumber != null &&
+                  episode.episodeNumber! > 0,
+            )
+            .toList()
+          ..sort((a, b) => a.episodeNumber!.compareTo(b.episodeNumber!));
+    if (numbered.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: AppText('Remote episode has no index')),
       );
       return;
     }
-    final offset = remoteStart - localAnchorEpisode;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const AppText('Batch match current season?'),
-        content: AppText(
-          '${selected.animeTitle}\n'
-          '${selected.episodes.length} remote episodes · ${_videos.length} local files\n'
-          'Local episode $localAnchorEpisode → remote episode $remoteStart\n\n'
-          'This saves the bindings only. Comments load when an episode plays.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const AppText('Cancel'),
-          ),
-          FilledButton(
-            key: const Key('confirm-batch-match'),
-            onPressed: () => Navigator.pop(context, true),
-            child: const AppText('Match all'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
+    final offset = numbered.first.episodeNumber! - 1;
     final bound = await _scraper?.bindSeries(
       _scope!,
       _videos,
@@ -298,6 +291,7 @@ class _DanmakuScrapeScreenState extends State<DanmakuScrapeScreen> {
       );
     }
     _changed();
+    if (mounted && !_disposing) await _run();
   }
 
   Future<void> _chooseEpisode(ScrapeEpisodeState episode) async {
@@ -328,16 +322,19 @@ class _DanmakuScrapeScreenState extends State<DanmakuScrapeScreen> {
       ),
     );
     if (selected == null || !mounted) return;
-    await _scraper?.manualMatchEpisode(
-      _scope!,
-      episode.key,
-      DanmakuEpisodeRef(
-        animeId: selected.anime.animeId,
-        episodeId: selected.episode.episodeId,
-        animeTitle: selected.anime.animeTitle,
-        episodeTitle: selected.episode.episodeTitle,
-      ),
+    final ref = DanmakuEpisodeRef(
+      animeId: selected.anime.animeId,
+      episodeId: selected.episode.episodeId,
+      animeTitle: selected.anime.animeTitle,
+      episodeTitle: selected.episode.episodeTitle,
     );
+    final keys = widget.matchSingleEpisode
+        ? _videos.map((video) => video.key)
+        : [episode.key];
+    for (final key in keys) {
+      if (!mounted || _disposing) return;
+      await _scraper?.manualMatchEpisode(_scope!, key, ref);
+    }
     _changed();
   }
 
@@ -383,12 +380,18 @@ class _DanmakuScrapeScreenState extends State<DanmakuScrapeScreen> {
         _videos.isNotEmpty) {
       _didOpenInitialPicker = true;
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (mounted && !_disposing) await _chooseSeriesForBatch();
+        if (mounted && !_disposing) await _chooseInitialSeries();
       });
     }
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const AppText('Scrape series danmaku')),
+      appBar: AppBar(
+        title: AppText(
+          widget.matchSingleEpisode
+              ? 'Match current episode danmaku'
+              : 'Scrape series danmaku',
+        ),
+      ),
       body: SafeArea(
         child: _preparing
             ? const Center(child: CircularProgressIndicator())
@@ -465,7 +468,7 @@ class _DanmakuScrapeScreenState extends State<DanmakuScrapeScreen> {
                       if (!_running)
                         FilledButton.tonalIcon(
                           key: const Key('select-danmaku-series'),
-                          onPressed: _selecting ? null : _chooseSeriesForBatch,
+                          onPressed: _selecting ? null : _chooseInitialSeries,
                           icon: _selecting
                               ? const SizedBox.square(
                                   dimension: 18,
@@ -476,14 +479,22 @@ class _DanmakuScrapeScreenState extends State<DanmakuScrapeScreen> {
                               : const Icon(
                                   Icons.playlist_add_check_circle_outlined,
                                 ),
-                          label: const AppText('Select series and batch match'),
+                          label: AppText(
+                            widget.matchSingleEpisode
+                                ? 'Match current episode danmaku'
+                                : 'Select series and batch match',
+                          ),
                         ),
                       if (!_running)
                         OutlinedButton.icon(
                           key: const Key('precache-season'),
                           onPressed: () => _run(),
                           icon: const Icon(Icons.cloud_download_outlined),
-                          label: const AppText('Pre-cache whole season'),
+                          label: AppText(
+                            widget.matchSingleEpisode
+                                ? 'Pre-cache current episode'
+                                : 'Pre-cache whole season',
+                          ),
                         ),
                     ],
                   ),

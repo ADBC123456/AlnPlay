@@ -282,7 +282,7 @@ final class UpnpClient: NSObject {
                     Self.diag("SSDP: no en* IPv4 (Wi-Fi off?)")
                 }
 
-                let msg = Data("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: urn:schemas-upnp-org:device:MediaServer:1\r\nUSER-AGENT: DreamPlayer/1.0 UPnP/1.0\r\n\r\n".utf8)
+                let msg = Data("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 3\r\nST: urn:schemas-upnp-org:device:MediaServer:1\r\nUSER-AGENT: AlnPlay/1.0 UPnP/1.0\r\n\r\n".utf8)
                 guard let dest = Self.sockaddrInet(target: "239.255.255.250", port: 1900) else {
                     Self.diag("sockaddrInet failed")
                     cont.resume(returning: locations); return

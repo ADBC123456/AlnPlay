@@ -32,6 +32,7 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
+  flutter_svg: ^2.2.1
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -41,7 +42,6 @@ dependencies:
   shared_preferences: ^2.5.5
   path_provider: ^2.1.5
   url_launcher: ^6.3.0
-  package_info_plus: ^10.2.1
   multicast_dns: ^0.3.3+1
   media_kit: ^1.2.6
   media_kit_video: ^2.0.1
@@ -81,6 +81,12 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  shaders:
+    - shaders/liquid_glass.frag
+
+  assets:
+    - assets/alnplay_logo.svg
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg
@@ -113,14 +119,13 @@ flutter:
   # see https://flutter.dev/to/font-from-package
 
 # App launcher icons (Android adaptive + all densities, iOS all sizes).
-# Source: blue play glyph on transparent bg; app_icon_dark.png composites it
-# onto the app's scaffold color (#0E0E11) so the icon matches the dark app on
-# every OS theme (iOS alpha removal would otherwise fill white).
+# Source: the AlnPlay AP/play mark on a white background, rasterized from
+# assets/alnplay_logo.svg so Android and iOS use the same brand artwork.
 # Regenerate with: flutter pub run flutter_launcher_icons
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: assets/app_icon_dark.png
-  adaptive_icon_background: '#0E0E11'
-  adaptive_icon_foreground: assets/app_icon_dark.png
+  image_path: assets/alnplay_app_icon.png
+  adaptive_icon_background: '#FFFFFF'
+  adaptive_icon_foreground: assets/alnplay_app_icon.png
   remove_alpha_ios: true

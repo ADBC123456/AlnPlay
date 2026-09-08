@@ -502,7 +502,7 @@ class JellyfinClient {
   Future<SharedPreferences> get _sharedPrefs async => _cachedPrefs ??= _prefs ?? await SharedPreferences.getInstance();
 
   String get _authHeader {
-    return 'MediaBrowser Client="DreamPlayer", Device="DreamPlayer", '
+    return 'MediaBrowser Client="AlnPlay", Device="AlnPlay", '
         'DeviceId="${DateTime.now().microsecondsSinceEpoch.toRadixString(16)}", Version="1.0.0"';
   }
 

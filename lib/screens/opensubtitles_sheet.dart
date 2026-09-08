@@ -252,31 +252,19 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) => AlertDialog(
-          backgroundColor: const Color(0xFF2C2C2E),
-          title: const AppText(
-            'Sign in to OpenSubtitles',
-            style: TextStyle(color: Colors.white),
-          ),
+          title: const AppText('Sign in to OpenSubtitles'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               TextField(
                 controller: uCtrl,
-                decoration: InputDecoration(
-                  labelText: ctx.tr('Username'),
-                  labelStyle: const TextStyle(color: Colors.white70),
-                ),
-                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(labelText: ctx.tr('Username')),
               ),
               const SizedBox(height: 8),
               TextField(
                 controller: pCtrl,
                 obscureText: true,
-                decoration: InputDecoration(
-                  labelText: ctx.tr('Password'),
-                  labelStyle: const TextStyle(color: Colors.white70),
-                ),
-                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(labelText: ctx.tr('Password')),
               ),
               if (err != null)
                 Padding(
@@ -292,7 +280,7 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
               const SizedBox(height: 8),
               const AppText(
                 'Anonymous = 5/day, free account = 20/day',
-                style: TextStyle(color: Colors.white54, fontSize: 11),
+                style: TextStyle(fontSize: 11),
               ),
             ],
           ),
@@ -340,11 +328,7 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                 padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: AppText(
                   'Search OpenSubtitles',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                 ),
               ),
               Padding(
@@ -356,9 +340,7 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                         controller: _queryCtrl,
                         decoration: InputDecoration(
                           hintText: context.tr('Movie / episode name'),
-                          hintStyle: const TextStyle(color: Colors.white38),
                         ),
-                        style: const TextStyle(color: Colors.white),
                         onSubmitted: (_) => _search(),
                       ),
                     ),
@@ -372,7 +354,9 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                           vertical: 10,
                         ),
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white24),
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.outlineVariant,
+                          ),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Row(
@@ -380,17 +364,10 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                           children: [
                             AppText(
                               displayNameForNovaCode(_novaCode),
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                              ),
+                              style: const TextStyle(fontSize: 12),
                             ),
                             const SizedBox(width: 4),
-                            const Icon(
-                              Icons.arrow_drop_down,
-                              color: Colors.white70,
-                              size: 16,
-                            ),
+                            const Icon(Icons.arrow_drop_down, size: 16),
                           ],
                         ),
                       ),
@@ -415,7 +392,7 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                   child: AppText(
                     'Hash match enabled',
                     style: TextStyle(
-                      color: Colors.green.shade300,
+                      color: Theme.of(context).colorScheme.primary,
                       fontSize: 11,
                     ),
                   ),
@@ -425,7 +402,7 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                   padding: EdgeInsets.fromLTRB(20, 4, 20, 0),
                   child: AppText(
                     'Computing file hash…',
-                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                    style: TextStyle(fontSize: 11),
                   ),
                 ),
               if (_error != null)
@@ -439,7 +416,7 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                     ),
                   ),
                 ),
-              const Divider(color: Colors.white12, height: 16),
+              const Divider(height: 16),
               if (_downloading)
                 const Padding(
                   padding: EdgeInsets.all(16),
@@ -451,10 +428,7 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       ),
                       SizedBox(width: 8),
-                      AppText(
-                        'Downloading…',
-                        style: TextStyle(color: Colors.white70),
-                      ),
+                      AppText('Downloading…'),
                     ],
                   ),
                 ),
@@ -469,30 +443,29 @@ class _OpensubtitlesSheetState extends State<OpensubtitlesSheet> {
                         : r.language.toUpperCase();
                     return ListTile(
                       leading: CircleAvatar(
-                        backgroundColor: Colors.white12,
+                        backgroundColor: Theme.of(
+                          context,
+                        ).colorScheme.surfaceContainerHighest,
+                        foregroundColor: Theme.of(
+                          context,
+                        ).colorScheme.onSurface,
                         child: AppText(
                           lang,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 11,
-                          ),
+                          style: const TextStyle(fontSize: 11),
                         ),
                       ),
                       title: AppText(
                         r.fileName.isEmpty
                             ? (r.release ?? 'Subtitle ${r.fileId}')
                             : r.fileName,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                        ),
+                        style: const TextStyle(fontSize: 13),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                       subtitle: AppText(
                         '${r.downloads} downloads · ★ ${r.ratings.toStringAsFixed(1)}${r.release != null ? ' · ${r.release}' : ''}',
-                        style: const TextStyle(
-                          color: Colors.white54,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                           fontSize: 11,
                         ),
                         maxLines: 1,

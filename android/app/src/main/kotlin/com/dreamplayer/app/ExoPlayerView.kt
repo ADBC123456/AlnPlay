@@ -517,6 +517,10 @@ class ExoPlayerView(
             emit()
         }
 
+        override fun onPlaybackParametersChanged(parameters: androidx.media3.common.PlaybackParameters) {
+            emit()
+        }
+
         override fun onPositionDiscontinuity(
             oldPosition: Player.PositionInfo,
             newPosition: Player.PositionInfo,
@@ -1464,7 +1468,7 @@ class ExoPlayerView(
         if (player.isPlaying && positionTicker == null) {
             positionTicker = object : Runnable {
                 override fun run() {
-                    emit()
+                    emit(progressOnly = true)
                     if (player.isPlaying) {
                         handler.postDelayed(this, 250)
                     }
@@ -1838,10 +1842,13 @@ class ExoPlayerView(
         return n.contains("google") || n.contains("ffmpeg") || n.startsWith("c2.android.")
     }
 
+    private var lastFullState: Map<String, Any?>? = null
+
     private fun emit(
         errorCodeName: String? = null,
         errorMessage: String? = null,
         errorCause: String? = null,
+        progressOnly: Boolean = false,
     ) {
         var name = errorCodeName
         var message = errorMessage
@@ -1852,10 +1859,29 @@ class ExoPlayerView(
                 message = dv.second
             }
         }
-        sink?.success(stateMap(name, message, errorCause))
+        val cached = lastFullState
+        val snapshot = if (progressOnly && cached != null && name == null) {
+            // Track lists, HDR configuration and Spatializer queries do not
+            // change with position. Their own callbacks publish full state.
+            HashMap(cached).apply {
+                put("positionMs", player.currentPosition)
+                put("durationMs", if (player.duration == C.TIME_UNSET) 0L else player.duration)
+                put("bufferedMs", player.bufferedPosition)
+                put("state", player.playbackState)
+                put("playing", player.isPlaying)
+                put("buffering", player.playbackState == Player.STATE_BUFFERING)
+                put("ended", player.playbackState == Player.STATE_ENDED)
+                put("error", null)
+                put("errorMessage", null)
+                put("errorCause", null)
+            }
+        } else {
+            stateMap(name, message, errorCause).also { lastFullState = it }
+        }
+        sink?.success(snapshot)
         // Mirror the state into the MediaSession + notification so background
         // playback controls (lock screen / headset / notification) stay live.
-        try { PlaybackManager.sync(activity) } catch (_: Exception) {}
+        try { PlaybackManager.sync(activity, progressOnly) } catch (_: Exception) {}
     }
 
     override fun getView(): View = playerView
@@ -1961,13 +1987,9 @@ class ExoPlayerView(
             android.hardware.display.DisplayManager)
             ?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
 
-    /// Switches the panel to the supported refresh mode closest to the video's
-    /// frame rate (23.976 → a 24/60 Hz mode instead of staying at the
-    /// startup-selected max), matching motion cadence to content like Just
-    /// Player / mpv do. Only fires when a candidate is meaningfully closer to
-    /// the content fps than the current mode; [restoreRefreshRate] undoes it
-    /// when the view is disposed. Resolution modes are filtered so only the
-    /// refresh rate changes.
+    /// Prefer integer multiples of the content cadence. On touch devices use
+    /// the highest matching rate (24/30/60 fps all fit 120 Hz); on TVs prefer
+    /// the lowest matching rate. Never change the display resolution.
     private fun matchRefreshRate() {
         val fps = player.videoFormat?.frameRate ?: return
         if (fps <= 0f || fps.isNaN()) return
@@ -1977,12 +1999,18 @@ class ExoPlayerView(
             it.physicalWidth == current.physicalWidth &&
                 it.physicalHeight == current.physicalHeight
         }
-        val best = candidates.minByOrNull { kotlin.math.abs(it.refreshRate - fps) } ?: return
-        val curErr = kotlin.math.abs(current.refreshRate - fps)
-        val bestErr = kotlin.math.abs(best.refreshRate - fps)
-        // Stay put when already within rounding distance of the content
-        // (59.94-vs-60 style) or when no candidate beats the current mode.
-        if (best.modeId == current.modeId || curErr < 0.5f || bestErr >= curErr) return
+        fun cadenceError(rate: Float): Float {
+            val multiple = kotlin.math.round(rate / fps).coerceAtLeast(1f)
+            return kotlin.math.abs(rate / multiple - fps)
+        }
+        val minimumError = candidates.minOfOrNull { cadenceError(it.refreshRate) } ?: return
+        val matching = candidates.filter { cadenceError(it.refreshRate) <= minimumError + 0.5f }
+        val best = if (MainActivity.isTvBox(activity)) {
+            matching.minByOrNull { it.refreshRate }
+        } else {
+            matching.maxByOrNull { it.refreshRate }
+        } ?: return
+        if (activity.window.attributes.preferredDisplayModeId == best.modeId) return
         runCatching {
             val params = activity.window.attributes
             params.preferredDisplayModeId = best.modeId

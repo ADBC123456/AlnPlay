@@ -11,6 +11,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../widgets/player_gesture_surface.dart';
+import '../widgets/player_chrome.dart';
+import '../library/unified_library_service.dart';
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 import '../danmaku/identity/video_identity.dart' as danmaku_identity;
@@ -93,6 +96,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Native playback backend: the in-app ExoPlayer platform view (the same
   /// hybrid-composition SurfaceView on phones and Android TV / Fire TV).
   PlaybackController? _exo;
+  Widget? _nativeVideoSurface;
   StreamSubscription<ExoPlayerEvent>? _exoSub;
 
   /// libmpv (media_kit) second engine, engaged only by explicit user choice —
@@ -167,9 +171,44 @@ class _PlayerScreenState extends State<PlayerScreen>
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   Duration _buffered = Duration.zero;
+  // Position ticks and scrubber drags repaint only the timeline.
+  final ValueNotifier<int> _progressChanges = ValueNotifier(0);
   bool _playing = false;
   bool _buffering = false;
   bool _completed = false;
+  bool _holdingSpeed = false;
+  double get _effectivePlaybackSpeed => _holdingSpeed ? 2.0 : _playbackSpeed;
+
+  // Only visible, non-timeline changes require rebuilding the player chrome.
+  Object get _chromeState => (
+    _playing,
+    _buffering,
+    _completed,
+    _error,
+    _controlsVisible,
+    _inPip,
+    _subtitleOn,
+    _selectedSubtitleTrack,
+    _subtitleTracks.length,
+    _selectedAudioTrackIndex,
+    _audioTracks.length,
+    _liveVideoCodec,
+    _liveHdr,
+    _liveResolution,
+    _liveAudioCodec,
+    _liveAudioLanguage,
+    _liveAudioChannelCount,
+    _liveAudioPassthrough,
+    _liveDecoderName,
+    _isHwDecoder,
+    _liveSpatial,
+    _liveBass,
+    _liveSourceScheme,
+  );
+
+  void _refreshProgress() {
+    if (mounted && _controlsVisible) _progressChanges.value++;
+  }
 
   /// Danmaku is a playback-side companion: loading or rendering failures must
   /// never affect either video backend. Both Media3 and MPV publish into this
@@ -372,7 +411,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// True when a playback backend (Media3 or mpv) is alive and can accept
   /// transport commands (play/pause, seek). The center buttons use this to
   /// decide whether they are enabled or greyed out.
-  bool get _backendReady => _exo != null || _mpvReady;
+  bool get _backendReady => !_preparingEpisode && (_exo != null || _mpvReady);
 
   /// True while the mpv fallback owns the video slot and its output is alive.
   bool get _mpvReady =>
@@ -448,6 +487,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
       final exo = ExoPlayerController();
       _exo = exo;
+      _nativeVideoSurface = RepaintBoundary(
+        child: IgnorePointer(child: ExoPlayerView(controller: exo)),
+      );
       _exoSub = exo.events.listen(_onExoEvent);
       // Repeat one loops natively on Android (no ended event); iOS handles
       // the restart from the Dart ended-handler.
@@ -560,7 +602,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       hideTop: !_danmakuDisplay.showTop,
       hideBottom: !_danmakuDisplay.showBottom,
       safeArea: true,
-      playbackRate: _playbackSpeed,
+      playbackRate: _effectivePlaybackSpeed,
     );
     _danmakuCanvasController?.updateOption(_danmakuOption);
   }
@@ -583,7 +625,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final snapshot = DanmakuClockSnapshot(
       positionSeconds: (position ?? _position).inMicroseconds / 1000000.0,
       durationSeconds: _duration.inMicroseconds / 1000000.0,
-      rate: _playbackSpeed,
+      rate: _effectivePlaybackSpeed,
       isPlaying: _playing,
       buffering: _buffering,
       seekRevision: _danmakuSeekRevision,
@@ -643,7 +685,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     DanmakuStatus.idle => _danmakuConfigured ? 'Off' : 'No source configured',
   };
 
-  Future<void> _openCurrent() async {
+  Future<bool> _openCurrent() async {
+    _endHoldSpeed();
     final video = _current;
     // A new video means a previous software-decode fallback was for the last
     // file only — restore the user's original decoder mode now.
@@ -680,7 +723,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted) {
         setState(() => _error = 'No video source provided.');
       }
-      return;
+      return false;
     }
     // A saved episode binding is cache-first. Wait for that lookup/fetch before
     // opening the autoplaying backend so the first frame already has its
@@ -724,8 +767,10 @@ class _PlayerScreenState extends State<PlayerScreen>
           );
     final externalSubs = await _resolveExternalSubtitles(video);
     final readingLang = await SubtitlePrefs.loadReadingLanguage();
+    if (!mounted || _exo == null) return false;
+    _preparedExoEvent = null;
     try {
-      await _exo?.open(
+      await _exo!.open(
         video.path ?? '',
         uri: video.uri,
         subtitleUri: video.subtitleUri,
@@ -743,8 +788,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       _exo?.setSpeed(_playbackSpeed);
       _exo?.setAudioBoost(_audioBoost);
       _exo?.setNightMode(_nightMode);
+      return true;
     } catch (e) {
       _setTerminalError('Playback unavailable: $e');
+      return false;
     }
   }
 
@@ -865,6 +912,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// anymore — the error surface shows a "Try with MPV" button instead, and
   /// the details screen offers both engines up front.
   void _setTerminalError(String message) {
+    _endHoldSpeed();
     if (mounted) setState(() => _error = message);
   }
 
@@ -1055,23 +1103,53 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Reloads [video] into the already-running mpv engine (play-next /
   /// repeat-all continuation after an ended mpv session).
   Future<void> _reloadMpv(VideoItem video, int startMs) async {
+    _endHoldSpeed();
     final p = _mpvPlayer;
     if (p == null || _inTests) return;
-    _mpvFailed = false;
-    _mpvError = null;
-    _current = video;
-    _markedWatched = false;
-    _autoPlayFired = false;
-    _abA = null;
-    _abB = null;
-    _completed = false;
-    _position = Duration.zero;
-    _duration = Duration.zero;
-    _buffered = Duration.zero;
-    _buffering = true;
-    await _loadDanmakuForVideo(video);
-    if (mounted) setState(() {});
-    await _mpvOpen(p, video, startMs);
+    _preparingEpisode = true;
+    try {
+      await p.stop();
+      if (!mounted) return;
+      _mpvFailed = false;
+      _mpvError = null;
+      final subtitles = await _resolveExternalSubtitles(video);
+      if (!mounted) return;
+      video = video.withExternalSubtitles(subtitles);
+      _current = video;
+      _pendingAudioTrackRestore = await AudioTrackStore.load(
+        _resumeKey,
+        engine: 'mpv',
+      );
+      _autoFetchFired = false;
+      _readingAutoSelected = false;
+      _chapters = video.chapters
+          .map(
+            (chapter) => ExoChapter(
+              title: chapter.title,
+              startMs: chapter.startMs,
+              endMs: chapter.endMs,
+            ),
+          )
+          .toList();
+      _markedWatched = false;
+      _autoPlayFired = false;
+      _abA = null;
+      _abB = null;
+      _completed = false;
+      _position = Duration.zero;
+      _duration = Duration.zero;
+      _buffered = Duration.zero;
+      _buffering = true;
+      await _loadDanmakuForVideo(video);
+      if (!mounted) return;
+      setState(() {});
+      // The previous mpv media was stopped before changing identity. New
+      // tracks/duration events during open now belong to the selected episode.
+      _preparingEpisode = false;
+      await _mpvOpen(p, video, startMs);
+    } finally {
+      _preparingEpisode = false;
+    }
   }
 
   /// The file/stream URL handed to libmpv: a non-path URI wins (http(s),
@@ -1356,9 +1434,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _listenMpv(Player player) {
     _mpvSubs.add(
       player.stream.playing.listen((v) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _buffering = false;
         _playing = v;
+        if (!v) _endHoldSpeed();
         _syncControlsForPlaybackState();
         _syncMpvPipState();
         _emitDanmakuClock();
@@ -1367,7 +1446,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     _mpvSubs.add(
       player.stream.position.listen((v) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _position = v;
         // A-B repeat: loop back to A whenever playback passes B.
         if (_abA != null &&
@@ -1382,21 +1461,21 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         _maybeSaveMpvResume(v);
         _emitDanmakuClock();
-        setState(() {});
+        _refreshProgress();
       }),
     );
     _mpvSubs.add(
       player.stream.duration.listen((v) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         if (v > Duration.zero) _hadMedia = true;
         _duration = v;
         _emitDanmakuClock();
-        setState(() {});
+        _refreshProgress();
       }),
     );
     _mpvSubs.add(
       player.stream.tracks.listen((t) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _mpvTracks = t;
         _syncMpvTrackMeta();
         // Restore the user's chosen audio track on first tracks event after open.
@@ -1415,7 +1494,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     _mpvSubs.add(
       player.stream.track.listen((t) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         // 'no' = subtitles explicitly off; 'auto' = mpv auto-selected a track
         // (subtitles ARE displaying); any other id = user manually selected one.
         _mpvSubtitleOn = t.subtitle.id != 'no';
@@ -1424,34 +1503,35 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     _mpvSubs.add(
       player.stream.subtitle.listen((lines) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _mpvSubtitleLines = lines.where((l) => l.trim().isNotEmpty).toList();
         setState(() {});
       }),
     );
     _mpvSubs.add(
       player.stream.width.listen((v) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _syncMpvTracksResolution();
         setState(() {});
       }),
     );
     _mpvSubs.add(
       player.stream.height.listen((v) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _syncMpvTracksResolution();
         setState(() {});
       }),
     );
     _mpvSubs.add(
       player.stream.buffer.listen((v) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _buffered = v;
+        _refreshProgress();
       }),
     );
     _mpvSubs.add(
       player.stream.buffering.listen((v) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _buffering = v;
         _syncControlsForPlaybackState();
         _emitDanmakuClock();
@@ -1460,7 +1540,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     _mpvSubs.add(
       player.stream.completed.listen((v) {
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         if (v) {
           _playing = false;
           _buffering = false;
@@ -1475,7 +1555,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _mpvSubs.add(
       player.stream.error.listen((msg) {
         debugPrint('mpv: playback error: $msg');
-        if (!mounted) return;
+        if (!mounted || _preparingEpisode) return;
         _markMpvFailed('Fallback player error: $msg');
       }),
     );
@@ -1564,6 +1644,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// so flipping this flag is what makes the pip window show only the video.
   void _onMpvPipChanged(bool inPip) {
     if (!mounted) return;
+    if (inPip) _endHoldSpeed();
     setState(() {
       _inPip = inPip;
       if (inPip) _controlsVisible = false;
@@ -1670,6 +1751,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// native ended path: sleep "end of video" → repeat one → repeat all /
   /// shuffle → auto-play-next (all continuing inside mpv).
   void _onMpvEnded() {
+    _endHoldSpeed();
     _error = null; // clear any lingering error so replay icon shows
     if (!_markedWatched) {
       _markedWatched = true;
@@ -1865,6 +1947,11 @@ class _PlayerScreenState extends State<PlayerScreen>
   String _friendlyError(ExoPlayerEvent e) => friendlyPlayerError(e);
 
   void _onExoEvent(ExoPlayerEvent e) {
+    if (_preparingEpisode) {
+      _preparedExoEvent = e;
+      return;
+    }
+    final previousChrome = _chromeState;
     final wasPlaying = _playing;
     final wasBuffering = _buffering;
     _playing = e.playing;
@@ -1873,6 +1960,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _buffered = e.buffered;
     _buffering = e.buffering;
     _completed = e.ended;
+    if (e.ended || !e.playing && !e.buffering || e.inPip) _endHoldSpeed();
     _emitDanmakuClock();
     // When the video finishes, clear any lingering error (e.g. the software
     // fallback banner or a transient IO message) so the replay icon shows
@@ -2076,7 +2164,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       // Fire-and-forget; handle async outside setState.
       Future.microtask(() => _maybeAutoFetchSubs());
     }
-    if (mounted) setState(() {});
+    if (mounted && previousChrome != _chromeState) setState(() {});
+    _refreshProgress();
   }
 
   Future<void> _maybeAutoPlayNext() async {
@@ -2345,6 +2434,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) _endHoldSpeed();
     // Persist the position when the app goes to the background or is killed,
     // so "continue where I stopped" works even if playback was mid-way.
     if (state == AppLifecycleState.paused ||
@@ -2450,11 +2540,12 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   void dispose() {
+    _endHoldSpeed(rebuild: false);
+    _progressChanges.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _sleepTicker?.cancel();
     _swipeOverlayTimer?.cancel();
-    _singleTapTimer?.cancel();
     _dtSeekTimer?.cancel();
     // Put the user's original decoder mode back if we forced software for the
     // current file's hardware-decoder failure.
@@ -2539,12 +2630,10 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   // ---- Double-tap seek (phones only; TV uses the D-pad buttons) ----
 
-  /// Pending single-tap, fired only if no double-tap lands within the window.
-  Timer? _singleTapTimer;
   int? _dtSeekSide; // -1 back, +1 forward
   Timer? _dtSeekTimer;
 
-  void _onTapUp(TapUpDetails details) {
+  void _onTapUp() {
     // PiP window: taps do nothing — the floating video stays clean.
     if (_inPip) return;
     if (_isTv) {
@@ -2558,21 +2647,391 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!_controlsVisible) _showControls();
       return;
     }
-    _singleTapTimer?.cancel();
-    _singleTapTimer = Timer(const Duration(milliseconds: 260), _onScreenTap);
+    _onScreenTap();
   }
 
-  void _onDoubleTapDown(TapDownDetails details) {
+  void _onDoubleTapDown(Offset position) {
     if (_isTv || !_backendReady || _touchLocked || _inPip) return;
-    _singleTapTimer?.cancel();
     final w = MediaQuery.of(context).size.width;
-    final forward = details.globalPosition.dx >= w / 2;
+    final direction = PlayerGestureSurface.seekDirection(position.dx, w);
+    if (direction == 0) return;
+    final forward = direction > 0;
     _seekBy(Duration(seconds: forward ? 10 : -10));
     _dtSeekTimer?.cancel();
     _dtSeekTimer = Timer(const Duration(milliseconds: 700), () {
       if (mounted) setState(() => _dtSeekSide = null);
     });
     setState(() => _dtSeekSide = forward ? 1 : -1);
+  }
+
+  bool _openingEpisode = false;
+  bool _preparingEpisode = false;
+  ExoPlayerEvent? _preparedExoEvent;
+
+  Future<List<_PlayerEpisodeChoice>> _episodeChoices() async {
+    final current = _current;
+    final metadata = current.metadataContext;
+    if (metadata != null) {
+      final library = UnifiedLibraryService.instance;
+      await library.initialize();
+      final snapshot = library.snapshot;
+      final episodes =
+          snapshot.episodes.values
+              .where(
+                (episode) =>
+                    episode.titleId == metadata.titleId &&
+                    episode.seasonNumber == metadata.seasonNumber,
+              )
+              .toList()
+            ..sort((a, b) => a.episodeNumber.compareTo(b.episodeNumber));
+      String? sourceId;
+      for (final file in snapshot.files.values) {
+        if (file.legacyResumeKey == _resumeKey) {
+          sourceId = file.sourceRef.sourceId;
+          break;
+        }
+      }
+      final choices = <_PlayerEpisodeChoice>[];
+      for (final episode in episodes) {
+        final versions = snapshot.versionsForEpisode(episode.id);
+        if (versions.isEmpty) continue;
+        final file = versions.firstWhere(
+          (file) => file.sourceRef.sourceId == sourceId,
+          orElse: () => versions.first,
+        );
+        choices.add(
+          _PlayerEpisodeChoice(
+            label:
+                '${episode.episodeNumber.toString().padLeft(2, '0')} · ${episode.displayName}',
+            current: episode.episodeNumber == metadata.episodeNumber,
+            // Resolve URLs only when chosen: opening the sheet must not probe
+            // every file/server in the season or interrupt the current stream.
+            load: () async {
+              final resolved = (await library.resolvePlayable(file))
+                  .withMetadataContext(
+                    VideoMetadataContext(
+                      titleId: metadata.titleId,
+                      displayTitle: metadata.displayTitle,
+                      originalTitle: metadata.originalTitle,
+                      seasonNumber: episode.seasonNumber,
+                      episodeNumber: episode.episodeNumber,
+                      episodeTitle: episode.displayName,
+                      revision: metadata.revision,
+                    ),
+                  );
+              return resolved;
+            },
+          ),
+        );
+      }
+      if (choices.isNotEmpty) return choices;
+    }
+    final siblings = await _orderedSiblings() ?? [current];
+    return siblings
+        .map(
+          (video) => _PlayerEpisodeChoice(
+            label: video.title,
+            current: video.path == current.path && video.uri == current.uri,
+            load: () async => video,
+          ),
+        )
+        .toList();
+  }
+
+  Future<void> _playEpisode(_PlayerEpisodeChoice choice) async {
+    if (_openingEpisode || _touchLocked || choice.current) return;
+    setState(() => _openingEpisode = true);
+    final previous = _current;
+    try {
+      final next = await choice.load();
+      if (!mounted || _current != previous) return;
+      _saveResume(_position);
+      _endHoldSpeed();
+      _preparingEpisode = true;
+      _preparedExoEvent = null;
+      if (!_mpvActive || _mpvPlayer == null) {
+        await _exo?.pause();
+      }
+      if (!mounted) return;
+      // Invalidate any delayed end-of-file advance before switching.
+      setState(() {
+        _completed = false;
+        _playing = false;
+        _buffering = true;
+        _position = Duration.zero;
+        _duration = Duration.zero;
+        _buffered = Duration.zero;
+        _error = null;
+      });
+      if (_mpvActive && _mpvPlayer != null) {
+        await _reloadMpv(next, 0);
+      } else {
+        _current = next;
+        final opened = await _openCurrent();
+        _preparingEpisode = false;
+        final event = _preparedExoEvent;
+        _preparedExoEvent = null;
+        if (mounted && opened && event != null) _onExoEvent(event);
+      }
+      if (mounted) _showControls();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: AppText('无法打开剧集：$error')));
+      }
+    } finally {
+      _preparingEpisode = false;
+      _preparedExoEvent = null;
+      if (mounted) setState(() => _openingEpisode = false);
+    }
+  }
+
+  Future<void> _playNextEpisode() async {
+    if (_openingEpisode || _touchLocked) return;
+    final current = _current;
+    try {
+      final choices = await _episodeChoices();
+      if (!mounted || _current != current) return;
+      final index = choices.indexWhere((choice) => choice.current);
+      if (index >= 0 && index + 1 < choices.length) {
+        await _playEpisode(choices[index + 1]);
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: AppText('No next episode')));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: AppText('Unable to load episodes')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openEpisodesSheet() async {
+    if (_touchLocked || _openingEpisode) return;
+    _endHoldSpeed();
+    _showControls();
+    final current = _current;
+    final choices = _episodeChoices();
+    final selected = await showModalBottomSheet<_PlayerEpisodeChoice>(
+      context: context,
+      backgroundColor: const Color(0xFF171719),
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * .65,
+          child: Column(
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: AppText(
+                  'Select episode',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: FutureBuilder<List<_PlayerEpisodeChoice>>(
+                  future: choices,
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return const Center(
+                        child: AppText('Unable to load episodes'),
+                      );
+                    }
+                    if (!snapshot.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final items = snapshot.data!;
+                    if (items.isEmpty) {
+                      return const Center(
+                        child: AppText('No episodes available'),
+                      );
+                    }
+                    return ListView.builder(
+                      itemCount: items.length,
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return ListTile(
+                          title: Text(
+                            item.label,
+                            style: TextStyle(
+                              color: item.current
+                                  ? PlayerChrome.accent
+                                  : Colors.white,
+                            ),
+                          ),
+                          selected: item.current,
+                          trailing: item.current
+                              ? const Icon(
+                                  Icons.equalizer,
+                                  color: PlayerChrome.accent,
+                                )
+                              : null,
+                          onTap: () => Navigator.pop(sheetContext, item),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || _current != current) return;
+    if (selected != null) await _playEpisode(selected);
+    if (mounted) _showControls();
+  }
+
+  Future<void> _openDanmakuSettingsSheet() async {
+    if (_touchLocked) return;
+    _endHoldSpeed();
+    _showControls();
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF171719),
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheet) {
+          Widget slider(
+            String label,
+            double value,
+            double min,
+            double max,
+            ValueChanged<double> update,
+          ) => Column(
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: AppText(
+                      label,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                  Text(
+                    label == 'Font size'
+                        ? value.round().toString()
+                        : '${(value * 100).round()}%',
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+              Slider(
+                value: value,
+                min: min,
+                max: max,
+                activeColor: PlayerChrome.accent,
+                onChanged: (value) {
+                  setSheet(() => update(value));
+                  _applyDanmakuDisplaySettings();
+                },
+              ),
+            ],
+          );
+          return SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * .8,
+              ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const AppText(
+                      'Danmaku settings',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    slider(
+                      'Font size',
+                      _danmakuDisplay.fontSize,
+                      12,
+                      48,
+                      (value) => _danmakuDisplay = _danmakuDisplay.copyWith(
+                        fontSize: value,
+                      ),
+                    ),
+                    slider(
+                      'Opacity',
+                      _danmakuDisplay.opacity,
+                      .1,
+                      1,
+                      (value) => _danmakuDisplay = _danmakuDisplay.copyWith(
+                        opacity: value,
+                      ),
+                    ),
+                    slider(
+                      'Display area',
+                      _danmakuDisplay.displayArea,
+                      .25,
+                      1,
+                      (value) => _danmakuDisplay = _danmakuDisplay.copyWith(
+                        displayArea: value,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    await DanmakuDisplaySettingsStore.save(_danmakuDisplay);
+    if (mounted) _showControls();
+  }
+
+  void _applyEffectiveSpeed() {
+    final speed = _effectivePlaybackSpeed;
+    if (_mpvReady) {
+      unawaited(_mpvPlayer?.setRate(speed));
+    } else {
+      unawaited(_exo?.setSpeed(speed));
+    }
+    _danmakuOption = _danmakuOption.copyWith(playbackRate: speed);
+    _danmakuCanvasController?.updateOption(_danmakuOption);
+    _emitDanmakuClock();
+  }
+
+  void _startHoldSpeed() {
+    if (_isTv ||
+        _touchLocked ||
+        _inPip ||
+        !_backendReady ||
+        !_playing ||
+        _completed ||
+        _holdingSpeed) {
+      return;
+    }
+    _hideTimer?.cancel();
+    setState(() => _holdingSpeed = true);
+    _applyEffectiveSpeed();
+    unawaited(HapticFeedback.selectionClick());
+  }
+
+  void _endHoldSpeed({bool rebuild = true}) {
+    if (!_holdingSpeed) return;
+    // The preferred speed is never overwritten or persisted by this gesture.
+    _holdingSpeed = false;
+    _applyEffectiveSpeed();
+    if (rebuild && mounted) {
+      setState(() {});
+      _restartHideTimer();
+    }
   }
 
   // ---- Unified gesture handling (single-finger pan + two-finger pinch) ----
@@ -2585,6 +3044,7 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   bool _panActive = false;
   _PanAxis? _panAxis;
+  Offset _panIntentDelta = Offset.zero;
 
   void _onScaleStart(ScaleStartDetails details) {
     if (_isTv || _touchLocked || _inPip) return;
@@ -2595,6 +3055,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     _panActive = true;
     _panAxis = null;
+    _panIntentDelta = Offset.zero;
     _hideTimer?.cancel();
   }
 
@@ -2615,8 +3076,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!_panActive) return;
     final delta = details.focalPointDelta;
     if (_panAxis == null) {
-      if (delta.dx.abs() < 4 && delta.dy.abs() < 4) return;
-      _panAxis = delta.dx.abs() > delta.dy.abs()
+      // High-refresh devices deliver tiny per-frame deltas. Accumulate them
+      // so slow, deliberate swipes are recognized too.
+      _panIntentDelta += delta;
+      if (_panIntentDelta.distance < 4) return;
+      _panAxis = _panIntentDelta.dx.abs() > _panIntentDelta.dy.abs()
           ? _PanAxis.horizontal
           : _PanAxis.vertical;
       if (_panAxis == _PanAxis.vertical) {
@@ -4051,10 +4515,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
     if (choice != null && choice != _playbackSpeed) {
       setState(() => _playbackSpeed = choice);
-      _danmakuOption = _danmakuOption.copyWith(playbackRate: choice);
-      _danmakuCanvasController?.updateOption(_danmakuOption);
-      _emitDanmakuClock();
-      _exo?.setSpeed(choice);
+      _applyEffectiveSpeed();
       if (!_inTests) PlaybackSpeedStore.save(choice);
     }
   }
@@ -4306,18 +4767,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                               onTap: () {
                                 if (_playbackSpeed != s) {
                                   setState(() => _playbackSpeed = s);
-                                  _danmakuOption = _danmakuOption.copyWith(
-                                    playbackRate: s,
-                                  );
-                                  _danmakuCanvasController?.updateOption(
-                                    _danmakuOption,
-                                  );
-                                  _emitDanmakuClock();
-                                  if (_mpvReady) {
-                                    unawaited(_mpvPlayer?.setRate(s));
-                                  } else {
-                                    _exo?.setSpeed(s);
-                                  }
+                                  _applyEffectiveSpeed();
                                   if (!_inTests) PlaybackSpeedStore.save(s);
                                 }
                                 setSheet(() {});
@@ -5317,13 +5767,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     _dragging = true;
     _dragValue = value;
     _hideTimer?.cancel();
-    setState(() {});
+    _refreshProgress();
   }
 
   void _onSeekUpdate(double value) {
     if (_touchLocked || !_dragging) return;
     _dragValue = value;
-    setState(() {});
+    _refreshProgress();
   }
 
   void _onSeekEnd(double value) {
@@ -5345,15 +5795,18 @@ class _PlayerScreenState extends State<PlayerScreen>
     _dragging = false;
     _dragValue = value;
     _showControls();
+    _refreshProgress();
   }
 
   void _toggleTouchLock() {
+    _endHoldSpeed();
     setState(() => _touchLocked = !_touchLocked);
     _showControls();
   }
 
   void _togglePlayPause() {
     if (_touchLocked) return;
+    _endHoldSpeed();
     final mpv = _mpvPlayer;
     if (_mpvReady && mpv != null) {
       unawaited(() async {
@@ -5382,6 +5835,48 @@ class _PlayerScreenState extends State<PlayerScreen>
       exo.play();
     }
     _showControls();
+  }
+
+  Widget _buildTimeline() {
+    final video = _current;
+    final total = _duration;
+    final maxMs = total.inMilliseconds > 0
+        ? total.inMilliseconds.toDouble()
+        : video.duration.inMilliseconds.toDouble().clamp(1.0, double.infinity);
+    final sliderValue = _dragging
+        ? _dragValue
+        : _position.inMilliseconds.toDouble().clamp(0, maxMs).toDouble();
+
+    return RepaintBoundary(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Text(
+                '${_formatDuration(_dragging ? Duration(milliseconds: _dragValue.round()) : _position)}/${_formatDuration(total)}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          _BufferedSeekBar(
+            value: sliderValue,
+            max: maxMs,
+            bufferedMs: _buffered.inMilliseconds.toDouble().clamp(0, maxMs),
+            onChangeStart: _onSeekStart,
+            onChanged: _onSeekUpdate,
+            onChangeEnd: _onSeekEnd,
+            onFocusChange: (_) => _showControls(),
+          ),
+        ],
+      ),
+    );
   }
 
   String _formatDuration(Duration d) {
@@ -5551,14 +6046,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     final video = _current;
     _isTv = isTvMode(context);
 
-    final total = _duration;
-    final maxMs = total.inMilliseconds > 0
-        ? total.inMilliseconds.toDouble()
-        : video.duration.inMilliseconds.toDouble().clamp(1.0, double.infinity);
-    final sliderValue = _dragging
-        ? _dragValue
-        : _position.inMilliseconds.toDouble().clamp(0, maxMs).toDouble();
-
     final hdrChip = FormatChip(label: _hdrLabel, color: _hdrColor);
     final audioChipLabel = _audioInfoLabel;
     final audioChip = audioChipLabel != null || _liveAudioPassthrough
@@ -5674,7 +6161,7 @@ class _PlayerScreenState extends State<PlayerScreen>
                       ),
                     ))
             : _exo != null && _error == null
-            ? ExoPlayerView(controller: _exo! as ExoPlayerController)
+            ? _nativeVideoSurface!
             : Container(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
@@ -5938,17 +6425,42 @@ class _PlayerScreenState extends State<PlayerScreen>
             // reach the app. Vertical drags adjust brightness (left half) or
             // volume (right half); taps toggle controls.
             Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTapUp: _onTapUp,
-                onDoubleTapDown: _onDoubleTapDown,
-                onDoubleTap: () {},
+              child: PlayerGestureSurface(
+                onTap: _onTapUp,
+                onDoubleTap: _onDoubleTapDown,
+                onHoldStart: _startHoldSpeed,
+                onHoldEnd: _endHoldSpeed,
                 onScaleStart: _onScaleStart,
                 onScaleUpdate: _onScaleUpdate,
                 onScaleEnd: _onScaleEnd,
-                child: const SizedBox.expand(),
               ),
             ),
+            if (_holdingSpeed && !_inPip)
+              Positioned(
+                top: MediaQuery.paddingOf(context).top + 20,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Center(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.72),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        child: AppText(
+                          '2× speed · Release to restore',
+                          style: TextStyle(color: Colors.white, fontSize: 14),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             // Error / placeholder content lives ABOVE the tap+swipe catcher
             // (which would otherwise swallow any buttons). In mpv mode the
             // fallback engine's own error is shown here instead.
@@ -6147,281 +6659,44 @@ class _PlayerScreenState extends State<PlayerScreen>
               const Center(
                 child: CircularProgressIndicator(color: Colors.white),
               ),
-            AnimatedSlide(
-              duration: const Duration(milliseconds: 200),
-              offset: _controlsVisible ? Offset.zero : const Offset(0, -1),
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Colors.black.withValues(alpha: 0.72),
-                      Colors.black.withValues(alpha: 0.35),
-                      Colors.transparent,
-                    ],
-                  ),
+            Positioned.fill(
+              child: PlayerChrome(
+                visible: _controlsVisible && !_inPip,
+                title: video.title,
+                badges: _inPip ? const [] : chips,
+                timeline: ListenableBuilder(
+                  listenable: _progressChanges,
+                  builder: (context, _) => _buildTimeline(),
                 ),
-                child: SafeArea(
-                  bottom: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 4, 4, 16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            _TvControlButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              icon: const Icon(Icons.arrow_back),
-                              color: Colors.white,
-                              onFocusChange: (_) => _showControls(),
-                            ),
-                            const SizedBox(width: 4),
-                            Expanded(
-                              child: AppText(
-                                video.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ),
-                            _TvControlButton(
-                              onPressed: _openVideoInfoSheet,
-                              icon: const Icon(Icons.info_outline),
-                              color: Colors.white,
-                              onFocusChange: (_) => _showControls(),
-                            ),
-                            const SizedBox(width: 4),
-                          ],
-                        ),
-                        // Defense-in-depth pip gate: the top bar already slides
-                        // off when _controlsVisible is false (which happens
-                        // when pip activates), but we also explicitly skip
-                        // rendering the chip row if _inPip is true. The pip
-                        // window must show ONLY the video — no chips, no
-                        // network indicator, no title bar.
-                        if (!_inPip && chips.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: Wrap(
-                              spacing: 8,
-                              runSpacing: 4,
-                              children: chips,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            AnimatedOpacity(
-              duration: const Duration(milliseconds: 200),
-              opacity: _controlsVisible ? 1 : 0,
-              child: IgnorePointer(
-                ignoring: !_controlsVisible,
-                child: Center(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // ±10 s buttons are TV-only (D-pad has no double-tap
-                      // gesture); phones use the double-tap-to-seek gesture.
-                      if (_isTv) ...[
-                        _TvControlButton(
-                          onPressed: !_backendReady
-                              ? null
-                              : () => _seekBy(const Duration(seconds: -10)),
-                          iconSize: 40,
-                          icon: const Icon(Icons.replay_10),
-                          color: Colors.white,
-                          onFocusChange: (_) => _showControls(),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      _TvControlButton(
-                        focusNode: _playPauseFocusNode,
-                        onPressed: !_backendReady ? null : _togglePlayPause,
-                        iconSize: 72,
-                        autofocus: true,
-                        alwaysShowRing: !_isTv,
-                        icon: Icon(
-                          _completed
-                              ? Icons.replay
-                              : _playing
-                              ? Icons.pause_circle_filled
-                              : Icons.play_circle_fill,
-                        ),
-                        color: Colors.white,
-                        onFocusChange: (_) => _showControls(),
-                      ),
-                      if (_isTv) ...[
-                        const SizedBox(width: 8),
-                        _TvControlButton(
-                          onPressed: !_backendReady
-                              ? null
-                              : () => _seekBy(const Duration(seconds: 10)),
-                          iconSize: 40,
-                          icon: const Icon(Icons.forward_10),
-                          color: Colors.white,
-                          onFocusChange: (_) => _showControls(),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            AnimatedSlide(
-              duration: const Duration(milliseconds: 200),
-              offset: _controlsVisible ? Offset.zero : const Offset(0, 1),
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: Container(
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withValues(alpha: 0.35),
-                        Colors.black.withValues(alpha: 0.72),
-                      ],
-                    ),
-                  ),
-                  child: SafeArea(
-                    top: false,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxHeight: MediaQuery.sizeOf(context).height * 0.5,
-                      ),
-                      child: SingleChildScrollView(
-                        reverse: true,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  AppText(
-                                    _formatDuration(
-                                      _dragging
-                                          ? Duration(
-                                              milliseconds: _dragValue.round(),
-                                            )
-                                          : _position,
-                                    ),
-                                    style: const TextStyle(color: Colors.white),
-                                  ),
-                                  AppText(
-                                    _formatDuration(total),
-                                    style: const TextStyle(color: Colors.white),
-                                  ),
-                                ],
-                              ),
-                              _BufferedSeekBar(
-                                value: sliderValue,
-                                max: maxMs,
-                                bufferedMs: _buffered.inMilliseconds
-                                    .toDouble()
-                                    .clamp(0, maxMs),
-                                onChangeStart: _onSeekStart,
-                                onChanged: _onSeekUpdate,
-                                onChangeEnd: _onSeekEnd,
-                                onFocusChange: (_) => _showControls(),
-                              ),
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  _TvControlButton(
-                                    onPressed: _openAudioTrackSheet,
-                                    icon: const Icon(Icons.graphic_eq),
-                                    color: Colors.white,
-                                    tooltip: context.tr('Audio tracks'),
-                                    onFocusChange: (_) => _showControls(),
-                                  ),
-                                  _TvControlButton(
-                                    onPressed: () => unawaited(
-                                      _setDanmakuVisible(!_danmakuVisible),
-                                    ),
-                                    icon: Icon(
-                                      _danmakuVisible
-                                          ? Icons.chat_bubble
-                                          : Icons.chat_bubble_outline,
-                                    ),
-                                    color: _danmakuVisible
-                                        ? const Color(0xFF4FC3F7)
-                                        : Colors.white54,
-                                    tooltip: _danmakuVisible
-                                        ? context.tr('Hide danmaku')
-                                        : context.tr('Show danmaku'),
-                                    onFocusChange: (_) => _showControls(),
-                                  ),
-                                  _TvControlButton(
-                                    onPressed: _openSubtitleSheet,
-                                    icon: Icon(
-                                      (_mpvReady ? _mpvSubtitleOn : _subtitleOn)
-                                          ? Icons.closed_caption
-                                          : Icons.closed_caption_off,
-                                    ),
-                                    color:
-                                        (_mpvReady
-                                            ? _mpvSubtitleOn
-                                            : _subtitleOn)
-                                        ? Colors.white
-                                        : Colors.white54,
-                                    tooltip: context.tr('Subtitles'),
-                                    onFocusChange: (_) => _showControls(),
-                                  ),
-                                  _TvControlButton(
-                                    onPressed: _openMoreSheet,
-                                    icon: const Icon(Icons.more_vert),
-                                    color: Colors.white,
-                                    onFocusChange: (_) => _showControls(),
-                                  ),
-                                  if (!_isTv)
-                                    _TvControlButton(
-                                      onPressed: _toggleTouchLock,
-                                      icon: Icon(
-                                        _touchLocked
-                                            ? Icons.lock
-                                            : Icons.lock_open,
-                                      ),
-                                      color: _touchLocked
-                                          ? Colors.amber
-                                          : Colors.white,
-                                    ),
-                                  if (!_isTv)
-                                    _TvControlButton(
-                                      onPressed: _toggleFullscreen,
-                                      icon: Icon(
-                                        _fullscreen
-                                            ? Icons.fullscreen_exit
-                                            : Icons.fullscreen,
-                                      ),
-                                      color: Colors.white,
-                                    ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+                playing: _playing,
+                completed: _completed,
+                locked: _touchLocked,
+                danmakuVisible: _danmakuVisible,
+                subtitlesEnabled: _mpvReady ? _mpvSubtitleOn : _subtitleOn,
+                fullscreen: _fullscreen,
+                isTv: _isTv,
+                speed: _playbackSpeed == 1 ? 'Speed' : '$_playbackSpeed×',
+                resolution: _resolutionInfoLabel ?? 'Video info',
+                playFocusNode: _playPauseFocusNode,
+                onFocus: _showControls,
+                onBack: () => Navigator.of(context).pop(),
+                onPlay: _backendReady ? _togglePlayPause : null,
+                onNext: _backendReady && !_openingEpisode
+                    ? _playNextEpisode
+                    : null,
+                onDanmaku: () =>
+                    unawaited(_setDanmakuVisible(!_danmakuVisible)),
+                onDanmakuSettings: _openDanmakuSettingsSheet,
+                onSubtitles: _openSubtitleSheet,
+                onEpisodes: _openEpisodesSheet,
+                onSpeed: _openSpeedSheet,
+                onInfo: _openVideoInfoSheet,
+                onAudio: _openAudioTrackSheet,
+                onMore: _openMoreSheet,
+                onLock: _toggleTouchLock,
+                onFullscreen: _toggleFullscreen,
+                onRewind: () => _seekBy(const Duration(seconds: -10)),
+                onForward: () => _seekBy(const Duration(seconds: 10)),
               ),
             ),
           ],
@@ -6429,6 +6704,17 @@ class _PlayerScreenState extends State<PlayerScreen>
       ),
     );
   }
+}
+
+class _PlayerEpisodeChoice {
+  const _PlayerEpisodeChoice({
+    required this.label,
+    required this.current,
+    required this.load,
+  });
+  final String label;
+  final bool current;
+  final Future<VideoItem> Function() load;
 }
 
 /// Custom seekbar with a gray buffer-progress indicator behind the active
@@ -6617,7 +6903,7 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
                       ),
                     ),
                   ),
-                  // Active progress fill (white)
+                  // Active progress fill
                   Positioned(
                     top:
                         (_touchHeight -
@@ -6629,7 +6915,7 @@ class _BufferedSeekBarState extends State<_BufferedSeekBar> {
                       duration: const Duration(milliseconds: 100),
                       height: _dragging ? _activeTrackHeight : _trackHeight,
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: PlayerChrome.accent,
                         borderRadius: BorderRadius.circular(3),
                       ),
                     ),
@@ -6737,124 +7023,3 @@ Widget _tvListTile({
     ),
   );
 }
-
-class _TvControlButton extends StatefulWidget {
-  const _TvControlButton({
-    required this.icon,
-    required this.onPressed,
-    this.focusNode,
-    this.iconSize = 28,
-    this.color,
-    this.autofocus = false,
-    this.onFocusChange,
-    this.alwaysShowRing = false,
-    this.tooltip,
-  });
-
-  final Widget icon;
-  final VoidCallback? onPressed;
-  final FocusNode? focusNode;
-  final double iconSize;
-  final Color? color;
-  final bool autofocus;
-  final ValueChanged<bool>? onFocusChange;
-  final String? tooltip;
-
-  /// When true the button always renders its ring highlight (border + glow),
-  /// even without keyboard/remote focus. Used for the center play/pause button
-  /// on touch devices so the ring is visible without a D-pad.
-  final bool alwaysShowRing;
-
-  @override
-  State<_TvControlButton> createState() => _TvControlButtonState();
-}
-
-class _TvControlButtonState extends State<_TvControlButton> {
-  late final FocusNode _node = widget.focusNode ?? FocusNode();
-
-  @override
-  void dispose() {
-    if (widget.focusNode == null) {
-      _node.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = widget.onPressed != null;
-
-    return Focus(
-      focusNode: _node,
-      autofocus: widget.autofocus,
-      canRequestFocus: enabled,
-      onFocusChange: (focused) {
-        if (focused) {
-          widget.onFocusChange?.call(focused);
-        }
-        if (mounted) setState(() {});
-      },
-      onKeyEvent: (node, event) {
-        if (!enabled) return KeyEventResult.ignored;
-        if (event is KeyDownEvent || event is KeyRepeatEvent) {
-          final key = event.logicalKey;
-          if (key == LogicalKeyboardKey.select ||
-              key == LogicalKeyboardKey.enter ||
-              key == LogicalKeyboardKey.numpadEnter ||
-              key == LogicalKeyboardKey.space ||
-              key == LogicalKeyboardKey.gameButtonA) {
-            widget.onPressed?.call();
-            return KeyEventResult.handled;
-          }
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Builder(
-        builder: (context) {
-          final focused = (_node.hasFocus || widget.alwaysShowRing) && enabled;
-          final primary = Theme.of(context).colorScheme.primary;
-
-          return AnimatedScale(
-            scale: focused ? 1.12 : 1.0,
-            duration: const Duration(milliseconds: 150),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: focused
-                    ? primary.withValues(alpha: 0.35)
-                    : Colors.transparent,
-                border: Border.all(
-                  color: focused ? primary : Colors.transparent,
-                  width: 3,
-                ),
-                boxShadow: focused
-                    ? [
-                        BoxShadow(
-                          color: primary.withValues(alpha: 0.35),
-                          blurRadius: 9,
-                          spreadRadius: 1,
-                        ),
-                      ]
-                    : null,
-              ),
-              child: IconButton(
-                onPressed: widget.onPressed,
-                iconSize: widget.iconSize,
-                icon: widget.icon,
-                color: widget.color ?? Colors.white,
-                tooltip: widget.tooltip,
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// Top-right live network speed indicator — small down-arrow + the current
-/// "5.2 MB/s" label, updated on every bandwidth event from the player.
-/// Lives next to the ⓘ button in the player top bar; hidden entirely in
-/// pip mode (the parent gates the widget out so the floating window shows
-/// only the video). When the speed is still loading (the player hasn't

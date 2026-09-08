@@ -19,7 +19,7 @@
     <!-- Without this, Android TV devices filter the app out. -->
     <uses-feature android:name="android.software.touchscreen" android:required="false"/>
     <application
-        android:label="DreamPlayer"
+        android:label="AlnPlay"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:banner="@drawable/banner"

@@ -510,7 +510,7 @@ class _SourceDialogState extends State<_SourceDialog> {
                       _testMessage!,
                       style: TextStyle(
                         color: _testMessage!.startsWith('Connection successful')
-                            ? Colors.greenAccent
+                            ? Theme.of(context).colorScheme.primary
                             : Theme.of(context).colorScheme.error,
                       ),
                     ),

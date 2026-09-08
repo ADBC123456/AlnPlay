@@ -45,7 +45,7 @@ void main() {
       ),
     );
 
-    await tester.pumpWidget(const DreamPlayerApp());
+    await tester.pumpWidget(const AlnPlayApp());
     await tester.pumpAndSettle();
     expect(listServerCalls, greaterThan(0));
     await tester.tap(find.text('资源库'));
@@ -62,65 +62,107 @@ void main() {
   });
 
   testWidgets('App shows library and settings shell', (tester) async {
-    await tester.pumpWidget(const DreamPlayerApp());
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(const AlnPlayApp());
 
-    expect(find.text('DreamPlayer'), findsOneWidget);
+    expect(find.text('AlnPlay'), findsOneWidget);
     expect(find.text('最近观看'), findsOneWidget);
     expect(find.text('电影'), findsOneWidget);
     expect(find.text('电视剧'), findsOneWidget);
     expect(find.text('媒体库'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);
     expect(find.text('资源库'), findsOneWidget);
+    expect(find.byIcon(Icons.search_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.search), findsNothing);
   });
 
-  testWidgets('Switching to settings tab shows settings', (tester) async {
-    await tester.pumpWidget(const DreamPlayerApp());
+  testWidgets('Dock search owns library search and returns from source tab', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(const AlnPlayApp());
+    await tester.pump();
 
-    await tester.tap(find.text('我的'));
+    await tester.tap(find.byIcon(Icons.search_rounded).last);
     await tester.pumpAndSettle();
-
-    expect(find.text('支持'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('关于'),
-      200,
-      scrollable: find.byType(Scrollable).last,
-    );
-    expect(find.text('关于'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('版本'),
-      200,
-      scrollable: find.byType(Scrollable).last,
-    );
-    expect(find.text('版本'), findsOneWidget);
-  });
-
-  testWidgets('About lists open-source licenses', (tester) async {
-    await tester.pumpWidget(const DreamPlayerApp());
-
-    await tester.tap(find.text('我的'));
-    await tester.pumpAndSettle();
-
-    await tester.scrollUntilVisible(
-      find.text('开源许可'),
-      200,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('开源许可'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('GNU GPL v3.0 and third-party notices'), findsNothing);
+    expect(find.text('搜索影片、剧集或文件'), findsOneWidget);
+    expect(find.byKey(const Key('library-search-overlay')), findsOneWidget);
     expect(
-      find.text('nextlib-media3ext (Android FFmpeg extension)'),
-      findsOneWidget,
-    );
-    expect(find.text('AetherEngine (iOS engine)'), findsOneWidget);
-    expect(
-      find.textContaining(
-        'DreamPlayer is free software released under the GNU General',
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is ModalBarrier &&
+            widget.color != null &&
+            widget.color!.a > 0,
       ),
-      findsOneWidget,
+      findsNothing,
     );
+    expect(find.text('最近观看'), findsOneWidget);
+    expect(find.text('电影'), findsOneWidget);
+    expect(find.text('电视剧'), findsOneWidget);
+
+    await tester.tap(find.text('资源库'));
+    await tester.pumpAndSettle();
+    expect(find.text('搜索影片、剧集或文件'), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.search_rounded));
+    await tester.pumpAndSettle();
+    expect(find.text('搜索影片、剧集或文件'), findsOneWidget);
+    expect(find.text('AlnPlay'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.search_rounded).last);
+    await tester.pumpAndSettle();
+    expect(find.text('搜索影片、剧集或文件'), findsNothing);
+    expect(find.text('AlnPlay'), findsNothing);
+    expect(find.text('资源库'), findsNWidgets(2));
+  });
+
+  testWidgets('Search close button restores My tab without masking home', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.pumpWidget(const AlnPlayApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('我的'));
+    await tester.pumpAndSettle();
+    expect(find.text('外观'), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.search_rounded));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('library-search-overlay')), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is ModalBarrier &&
+            widget.color != null &&
+            widget.color!.a > 0,
+      ),
+      findsNothing,
+    );
+    expect(find.text('AlnPlay'), findsOneWidget);
+    expect(find.text('电影'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('library-search-close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('library-search-overlay')), findsNothing);
+    expect(find.text('外观'), findsOneWidget);
+  });
+
+  testWidgets('Settings omit support, about, and maker content', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const AlnPlayApp());
+
+    await tester.tap(find.text('我的'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('外观'), findsOneWidget);
+    expect(find.text('主题'), findsOneWidget);
+    expect(find.text('支持'), findsNothing);
+    expect(find.text('关于'), findsNothing);
+    expect(find.text('版本'), findsNothing);
+    expect(find.text('开源许可'), findsNothing);
+    expect(find.textContaining('Mangesh Ghodke'), findsNothing);
   });
 
   testWidgets('Clear cache shows a confirmation and confirms', (tester) async {
@@ -130,7 +172,7 @@ void main() {
       const MethodChannel('dreamplayer/cache'),
       (call) async => 0,
     );
-    await tester.pumpWidget(const DreamPlayerApp());
+    await tester.pumpWidget(const AlnPlayApp());
 
     await tester.tap(find.text('我的'));
     await tester.pumpAndSettle();
@@ -179,7 +221,7 @@ void main() {
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(const DreamPlayerApp());
+    await tester.pumpWidget(const AlnPlayApp());
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -190,7 +232,7 @@ void main() {
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(const DreamPlayerApp());
+    await tester.pumpWidget(const AlnPlayApp());
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -201,7 +243,7 @@ void main() {
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(const DreamPlayerApp());
+    await tester.pumpWidget(const AlnPlayApp());
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
@@ -215,7 +257,7 @@ void main() {
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(const DreamPlayerApp());
+    await tester.pumpWidget(const AlnPlayApp());
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('资源库'));
@@ -247,7 +289,7 @@ void main() {
     tester.platformDispatcher.textScaleFactorTestValue = 2.0;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
-    await tester.pumpWidget(const DreamPlayerApp());
+    await tester.pumpWidget(const AlnPlayApp());
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);

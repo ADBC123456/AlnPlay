@@ -73,7 +73,7 @@ class OpensubtitlesClient {
   static final instance = OpensubtitlesClient._();
 
   static const _host = 'api.opensubtitles.com';
-  static const _userAgent = 'DreamPlayer/0.2.6';
+  static const _userAgent = 'AlnPlay/0.2.6';
 
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 15)

@@ -9,7 +9,9 @@ import 'models/video_item.dart';
 import 'services/jellyfin_client.dart';
 import 'services/open_intent.dart';
 import 'theme/app_theme.dart';
+import 'theme/theme_controller.dart';
 import 'l10n/app_localizations.dart';
+import 'widgets/liquid_glass_dock.dart';
 
 /// Used by the "Open with" intent handler to navigate without a BuildContext.
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -19,26 +21,28 @@ final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 final RouteObserver<ModalRoute<void>> appRouteObserver =
     RouteObserver<ModalRoute<void>>();
 
-class DreamPlayerApp extends StatefulWidget {
-  const DreamPlayerApp({super.key});
+class AlnPlayApp extends StatefulWidget {
+  const AlnPlayApp({super.key});
 
   @override
-  State<DreamPlayerApp> createState() => _DreamPlayerAppState();
+  State<AlnPlayApp> createState() => _AlnPlayAppState();
 }
 
-class _DreamPlayerAppState extends State<DreamPlayerApp> {
+class _AlnPlayAppState extends State<AlnPlayApp> {
   @override
   void initState() {
     super.initState();
-    AppLocaleController.instance.addListener(_languageChanged);
+    AppLocaleController.instance.addListener(_appStateChanged);
+    AppThemeController.instance.addListener(_appStateChanged);
     _listenForIntents();
   }
 
-  void _languageChanged() => setState(() {});
+  void _appStateChanged() => setState(() {});
 
   @override
   void dispose() {
-    AppLocaleController.instance.removeListener(_languageChanged);
+    AppLocaleController.instance.removeListener(_appStateChanged);
+    AppThemeController.instance.removeListener(_appStateChanged);
     super.dispose();
   }
 
@@ -83,9 +87,11 @@ class _DreamPlayerAppState extends State<DreamPlayerApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'DreamPlayer',
+      title: 'AlnPlay',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark(),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: AppThemeController.instance.themeMode,
       locale: AppLocaleController.instance.locale,
       supportedLocales: const [Locale('zh'), Locale('en')],
       localizationsDelegates: const [
@@ -95,17 +101,6 @@ class _DreamPlayerAppState extends State<DreamPlayerApp> {
       ],
       navigatorKey: appNavigatorKey,
       navigatorObservers: [appRouteObserver],
-      builder: (context, child) {
-        final mediaQuery = MediaQuery.of(context);
-        final clampedTextScaler = mediaQuery.textScaler.clamp(
-          minScaleFactor: 1.0,
-          maxScaleFactor: 1.3,
-        );
-        return MediaQuery(
-          data: mediaQuery.copyWith(textScaler: clampedTextScaler),
-          child: child!,
-        );
-      },
       home: const RootShell(),
     );
   }
@@ -128,6 +123,8 @@ class _RootShellState extends State<RootShell> {
   /// reload its "Continue watching" list even though IndexedStack keeps it
   /// alive (playing from the file browser/WebDAV never pushes through Home).
   final ValueNotifier<int> _homeRefreshTick = ValueNotifier(0);
+  bool _searchActive = false;
+  int _indexBeforeSearch = 0;
 
   @override
   void dispose() {
@@ -140,6 +137,10 @@ class _RootShellState extends State<RootShell> {
   /// route is pushed above (player, browsers, dialogs) pop those normally and
   /// never reach this handler.
   void _handleRootBack() {
+    if (_searchActive) {
+      _closeSearch();
+      return;
+    }
     final now = DateTime.now();
     if (_lastBackPress == null ||
         now.difference(_lastBackPress!) > const Duration(seconds: 2)) {
@@ -157,61 +158,99 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
+  void _openSearch() {
+    setState(() {
+      _indexBeforeSearch = _selectedIndex;
+      _selectedIndex = 0;
+      _searchActive = true;
+    });
+  }
+
+  void _closeSearch() {
+    setState(() {
+      _searchActive = false;
+      _selectedIndex = _indexBeforeSearch;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
+    final dockHeight = LiquidGlassDock.heightFor(mediaQuery.textScaler);
+    final dockReserve = dockHeight + 24;
     // Android edge-to-edge reports `padding.top == 0` (transparent status
     // bar), so SliverAppBar/AppBar won't push content below the status bar.
     // Map the real status-bar inset (`viewPadding`) into `padding` for the
     // library/settings tabs so they never clash with the status bar.
     final padded = mediaQuery.copyWith(
-      padding: mediaQuery.padding.copyWith(top: mediaQuery.viewPadding.top),
+      padding: mediaQuery.padding.copyWith(
+        top: mediaQuery.viewPadding.top,
+        bottom: mediaQuery.viewPadding.bottom + dockReserve,
+      ),
     );
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (didPop) return;
-        _handleRootBack();
-      },
-      child: Scaffold(
-        body: MediaQuery(
-          data: padded,
-          child: IndexedStack(
-            index: _selectedIndex == 2 ? 1 : 0,
-            children: [
-              HomeScreen(
-                refreshTick: _homeRefreshTick,
-                sourcesOnly: _selectedIndex == 1,
-              ),
-              const SettingsScreen(),
-            ],
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: AppTheme.systemOverlayStyle(Theme.of(context).brightness),
+      child: PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          _handleRootBack();
+        },
+        child: Scaffold(
+          // Search is a floating action over the media library. Keep the
+          // library at its normal height while the IME covers the lower part
+          // of the screen, otherwise the nested home scroll view can collapse
+          // to an apparently empty page on tall phone keyboards.
+          resizeToAvoidBottomInset: false,
+          extendBody: true,
+          body: MediaQuery(
+            data: padded,
+            child: IndexedStack(
+              index: _selectedIndex == 2 ? 1 : 0,
+              children: [
+                HomeScreen(
+                  refreshTick: _homeRefreshTick,
+                  searchActive: _searchActive,
+                  onSearchDismissed: _closeSearch,
+                  sourcesOnly: _selectedIndex == 1,
+                ),
+                const SettingsScreen(),
+              ],
+            ),
           ),
-        ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _selectedIndex,
-          onDestinationSelected: (index) {
-            setState(() {
-              _selectedIndex = index;
-            });
-            if (index == 0) _homeRefreshTick.value++;
-          },
-          destinations: [
-            NavigationDestination(
-              icon: const Icon(Icons.smart_display_outlined),
-              selectedIcon: const Icon(Icons.smart_display),
-              label: context.tr('Library'),
+          bottomNavigationBar: SafeArea(
+            minimum: const EdgeInsets.symmetric(horizontal: 16),
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Center(
+                heightFactor: 1,
+                child: LiquidGlassDock(
+                  selectedIndex: _selectedIndex,
+                  onDestinationSelected: (index) {
+                    setState(() {
+                      _selectedIndex = index;
+                      _searchActive = false;
+                    });
+                    if (index == 0) _homeRefreshTick.value++;
+                  },
+                  onSearch: () {
+                    if (_searchActive) {
+                      _closeSearch();
+                    } else {
+                      _openSearch();
+                    }
+                  },
+                  searchActive: _searchActive,
+                  labels: [
+                    context.tr('Library'),
+                    context.tr('Source library'),
+                    context.tr('My'),
+                  ],
+                  searchLabel: context.tr('Search'),
+                ),
+              ),
             ),
-            NavigationDestination(
-              icon: const Icon(Icons.folder_outlined),
-              selectedIcon: const Icon(Icons.folder),
-              label: context.tr('Source library'),
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.person_outline),
-              selectedIcon: const Icon(Icons.person),
-              label: context.tr('My'),
-            ),
-          ],
+          ),
         ),
       ),
     );

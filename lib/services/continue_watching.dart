@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/video_item.dart';
+import '../library/title_playback_preferences.dart';
+import '../library/unified_library_service.dart';
 import 'webdav_client.dart';
 
 /// A video the user was watching: keeps enough metadata (title, source,
@@ -144,6 +146,17 @@ class ContinueWatchingStore {
       _prefsKey,
       jsonEncode(all.map((e) => e.toJson()).toList()),
     );
+    final file = UnifiedLibraryService.instance.snapshot.files.values
+        .where((file) => file.legacyResumeKey == key)
+        .firstOrNull;
+    if (file?.titleId != null) {
+      await TitlePlaybackPreferences.save(
+        titleId: file!.titleId!,
+        lastPlayedFileId: file.id,
+        lastPlayedEpisodeId: file.episodeId,
+        playedAt: all.first.updatedAt,
+      );
+    }
     changes.notify();
   }
 

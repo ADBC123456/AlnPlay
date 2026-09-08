@@ -759,7 +759,9 @@ class _FolderScreenState extends State<FolderScreen> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+                color: backdrop != null
+                    ? Colors.white
+                    : theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),
