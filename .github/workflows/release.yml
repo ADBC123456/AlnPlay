@@ -86,6 +86,11 @@ jobs:
       - name: Build unsigned iOS app
         run: flutter build ios --release --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }} --dart-define=OPENSUBTITLES_API_KEY=${{ secrets.OPENSUBTITLES_API_KEY }} --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}
 
+      - name: Verify HTTP is enabled in the built app
+        run: |
+          VALUE="$(/usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsArbitraryLoads' build/ios/iphoneos/Runner.app/Info.plist)"
+          test "$VALUE" = "true"
+
       - name: Package unsigned IPA
         run: |
           VERSION="${GITHUB_REF_NAME#v}"

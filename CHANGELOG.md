@@ -3,6 +3,12 @@
 All notable changes to AlnPlay are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 1.0.1
+
+### Fixed
+
+- **iOS/iPadOS HTTP servers** — App Transport Security now permits user-configured plain HTTP connections, including WebDAV and Jellyfin servers reached through LAN IP addresses and non-standard ports. This fixes connection tests failing before the request reached servers such as `http://192.168.213:5244/dav`.
+
 ## 1.0.0
 
 ### Added
