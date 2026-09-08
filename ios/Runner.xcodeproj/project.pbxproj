@@ -706,16 +706,16 @@
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/superuser404notfound/AetherEngine";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 6.38.0;
+				kind = exactVersion;
+				version = 6.38.0;
 			};
 		};
 				A1B2C3D40000000000000015 /* XCRemoteSwiftPackageReference "Citadel" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/orlandos-nl/Citadel.git";
 			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.12.1;
+				kind = exactVersion;
+				version = 0.12.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
