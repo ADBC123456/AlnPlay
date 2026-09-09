@@ -9,6 +9,7 @@ import '../models/video_item.dart';
 import 'ftp_client.dart';
 import 'smb_client.dart';
 import 'webdav_client.dart';
+import 'cache_quota_manager.dart';
 
 /// Auto-discovers sidecar subtitle files for a video that lives on a
 /// network share. Mirrors the local-filesystem pairing rule used by
@@ -30,8 +31,17 @@ class SidecarSubtitleService {
   /// the iOS `subtitleExtensions` set in `AvPlayerView.swift` and the
   /// `SubtitleFormats.SUBTITLE_EXTENSIONS` set in `SubtitleFormats.kt`.
   static const _extensions = {
-    'srt', 'ass', 'ssa', 'vtt', 'webvtt', 'ttml', 'dfxp', 'xml',
-    'sub', 'smi', 'mpl2',
+    'srt',
+    'ass',
+    'ssa',
+    'vtt',
+    'webvtt',
+    'ttml',
+    'dfxp',
+    'xml',
+    'sub',
+    'smi',
+    'mpl2',
   };
 
   /// MIME type per extension. Matches `SubtitleFormats.mimeTypeFor()`.
@@ -67,7 +77,7 @@ class SidecarSubtitleService {
   Future<List<VideoExternalSub>> find(VideoItem video) async {
     final uri = video.uri;
     // ignore: avoid_print
-    print('[SidecarDBG] find: uri=$uri, webdavServerId=${video.webdavServerId}');
+    print('[SidecarDBG] find: checking source sidecars');
     if (uri == null || uri.isEmpty) return const [];
     try {
       // SMB sidecar discovery is Android-only: iOS SMB was retired (2026-08)
@@ -85,7 +95,7 @@ class SidecarSubtitleService {
       }
     } catch (e) {
       // ignore: avoid_print
-      print('[SidecarDBG] find: EXCEPTION $e');
+      print('[SidecarDBG] find: ${e.runtimeType}');
       // Sidecar discovery is best-effort: never block playback.
     }
     return const [];
@@ -136,20 +146,22 @@ class SidecarSubtitleService {
           }
         } catch (e) {
           // ignore: avoid_print
-          print('[SidecarDBG] ensureLocal http fetch failed ($uri): $e');
+          print('[SidecarDBG] ensureLocal http fetch failed: ${e.runtimeType}');
           // Subtitle download is best-effort: keep the remote URI and let the
           // engine stream it, rather than failing the whole video open.
         }
       }
-      out.add(local == null
-          ? sub
-          : VideoExternalSub(
-              uri: local,
-              label: sub.label,
-              language: sub.language,
-              mimeType: sub.mimeType,
-              isDefault: sub.isDefault,
-            ));
+      out.add(
+        local == null
+            ? sub
+            : VideoExternalSub(
+                uri: local,
+                label: sub.label,
+                language: sub.language,
+                mimeType: sub.mimeType,
+                isDefault: sub.isDefault,
+              ),
+      );
     }
     return out;
   }
@@ -177,7 +189,10 @@ class SidecarSubtitleService {
     try {
       // Same decode as `_findFtp`: the browser URI is percent-encoded but the
       // native `fetchBytes` wants the raw (decoded) remote path.
-      final bytes = await FtpClient.instance.fetchBytes(serverId, _decodePath(path));
+      final bytes = await FtpClient.instance.fetchBytes(
+        serverId,
+        _decodePath(path),
+      );
       if (bytes == null || bytes.isEmpty) return null;
       final local = await _writeToCache(_filenameOf(path), bytes);
       return local;
@@ -210,7 +225,11 @@ class SidecarSubtitleService {
     final (serverId, share, path) = parsed;
     final dir = _parentDir(path);
     if (dir == null) return const [];
-    final entries = await SmbClient.instance.listDirectoryAll(serverId, share, dir);
+    final entries = await SmbClient.instance.listDirectoryAll(
+      serverId,
+      share,
+      dir,
+    );
     return _buildSubs(
       source: entries.map((e) => (e.name, e.path)).toList(),
       videoPath: path,
@@ -239,7 +258,7 @@ class SidecarSubtitleService {
   ) async {
     final webdavId = _webdavServerIdFor(video);
     // ignore: avoid_print
-    print('[SidecarDBG] _findWebDavOrHttp: uri=$uri webdavId=$webdavId');
+    print('[SidecarDBG] _findWebDavOrHttp: checking directory identity');
 
     // Only probe URL-sibling sidecars for a source backed by a real WebDAV
     // server directory. For a generic http(s) stream URL that isn't a WebDAV
@@ -252,11 +271,12 @@ class SidecarSubtitleService {
     // stream URLs have no discoverable sibling names — skip them entirely.
     if (webdavId == null || webdavId.isEmpty) {
       // ignore: avoid_print
-      print('[SidecarDBG] _findWebDavOrHttp: no WebDAV identity — skipping probe');
+      print(
+        '[SidecarDBG] _findWebDavOrHttp: no WebDAV identity — skipping probe',
+      );
       return const [];
     }
 
-    String? baseUrl;
     Map<String, String> headers;
     bool allowSelfSigned;
 
@@ -276,13 +296,12 @@ class SidecarSubtitleService {
       print('[SidecarDBG] _findWebDavOrHttp: server not found');
       return const [];
     }
-    baseUrl = server.url.replaceAll(RegExp(r'/+$'), '');
     allowSelfSigned = server.allowSelfSigned;
     // Credentials are read natively per-fetch; passing an empty headers map
     // makes the native side build `Authorization` from the saved server.
     headers = const {};
     // ignore: avoid_print
-    print('[SidecarDBG] _findWebDavOrHttp: server url=$baseUrl selfSigned=$allowSelfSigned');
+    print('[SidecarDBG] _findWebDavOrHttp: source configured');
 
     // Work from the parsed URI: `Uri.path` is decoded, so a playback URL that
     // is percent-encoded (`Test%20Video.en.mp4`) yields a clean `Test Video.en`
@@ -297,7 +316,7 @@ class SidecarSubtitleService {
     // extension. Stop at the first hit (Nova-style; a matched track is enough).
     for (final (candidateUrl, subName) in candidates) {
       // ignore: avoid_print
-      print('[SidecarDBG] _findWebDavOrHttp: probing $candidateUrl');
+      print('[SidecarDBG] _findWebDavOrHttp: probing sibling');
       final bytes = await _fetch(
         serverId: webdavId,
         url: candidateUrl,
@@ -307,7 +326,7 @@ class SidecarSubtitleService {
       if (bytes == null || bytes.isEmpty) continue;
 
       // ignore: avoid_print
-      print('[SidecarDBG] _findWebDavOrHttp: HIT $candidateUrl (${bytes.length} bytes)');
+      print('[SidecarDBG] _findWebDavOrHttp: HIT (${bytes.length} bytes)');
       final localUri = await _writeToCache(subName, bytes);
       if (localUri == null) continue;
       return [
@@ -350,7 +369,9 @@ class SidecarSubtitleService {
         (
           parsed
               .replace(
-                path: dirPath.isEmpty ? '/$videoBase.$ext' : '/$dirPath/$videoBase.$ext',
+                path: dirPath.isEmpty
+                    ? '/$videoBase.$ext'
+                    : '/$dirPath/$videoBase.$ext',
                 query: null,
                 fragment: null,
               )
@@ -577,7 +598,7 @@ class SidecarSubtitleService {
       final base = await _cacheDir();
       final safe = _encodeSegment(name);
       final file = File('${base.path}/$safe');
-      await file.writeAsBytes(bytes, flush: true);
+      if (!await CacheQuotaManager.instance.write(file, bytes)) return null;
       return file.uri.toString();
     } catch (_) {
       return null;

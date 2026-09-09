@@ -1,5 +1,9 @@
 import 'package:flutter/services.dart';
 
+import '../library/source/strm_file.dart';
+import '../models/video_item.dart';
+import '../utils/file_info_extractor.dart';
+
 /// A directory/file entry returned by the native file browser.
 class FileEntry {
   const FileEntry({
@@ -37,6 +41,60 @@ class FileEntry {
       bookmarkId: map['bookmarkId'] as String?,
       resumeKey: map['resumeKey'] as String?,
       isFilesHome: (map['isFilesHome'] as bool?) ?? false,
+    );
+  }
+
+  /// Stable local-file identity used even when a STRM target URL rotates.
+  String get playbackIdentity => resumeKey ?? path;
+
+  VideoItem toVideoItem({String? id}) {
+    final isContentUri = path.startsWith('content://');
+    final info = extractFileInfo(name);
+    return VideoItem(
+      id: id ?? 'file_${playbackIdentity.hashCode}',
+      title: name,
+      path: isContentUri ? null : path,
+      uri: isContentUri ? path : null,
+      resumeKey: playbackIdentity,
+      duration: Duration.zero,
+      sizeBytes: size,
+      videoCodec: info.videoCodec,
+      audioCodec: info.audioCodec,
+      audioChannels: info.audioChannels,
+      resolution: info.resolution,
+      hdrHint: info.hdrHint,
+    );
+  }
+
+  /// Resolves a local STRM pointer immediately before playback. Only the
+  /// bounded pointer text is read; the HTTP(S) target is not requested here.
+  Future<VideoItem> resolvePlayable({String? id}) async {
+    if (!isStrmFileName(name)) return toVideoItem(id: id);
+    final text = await FileBrowserService.instance.readSmallText(
+      path,
+      resumeKey: playbackIdentity,
+    );
+    if (text == null) {
+      throw const StrmFormatException('This STRM file could not be read');
+    }
+    final target = parseExternalStrm(text);
+    final targetName = target.pathSegments.isEmpty
+        ? name
+        : Uri.decodeComponent(target.pathSegments.last);
+    final info = extractFileInfo(targetName);
+    return VideoItem(
+      id: id ?? 'file_${playbackIdentity.hashCode}',
+      title: name,
+      path: path,
+      uri: target.toString(),
+      resumeKey: playbackIdentity,
+      duration: Duration.zero,
+      videoCodec: info.videoCodec,
+      audioCodec: info.audioCodec,
+      audioChannels: info.audioChannels,
+      resolution: info.resolution,
+      hdrHint: info.hdrHint,
+      uriIsTransient: true,
     );
   }
 }
@@ -82,11 +140,26 @@ class FileBrowserService {
         .toList();
   }
 
+  /// Reads a bounded UTF-8 text file without loading an unbounded object.
+  Future<String?> readSmallText(
+    String path, {
+    int maxBytes = 65536,
+    String? resumeKey,
+  }) async {
+    return _channel.invokeMethod<String>('readSmallText', {
+      'path': path,
+      'maxBytes': maxBytes.clamp(1, 65536),
+      'resumeKey': ?resumeKey,
+    });
+  }
+
   /// Presents the system folder picker (iOS document picker / Android
   /// ACTION_OPEN_DOCUMENT_TREE). Returns the picked folder, bookmarked for
   /// future sessions, or null if the user cancelled.
   Future<FileEntry?> pickFolder() async {
-    final result = await _channel.invokeMapMethod<dynamic, dynamic>('pickFolder');
+    final result = await _channel.invokeMapMethod<dynamic, dynamic>(
+      'pickFolder',
+    );
     if (result == null) return null;
     return FileEntry.fromMap(result);
   }
@@ -95,8 +168,9 @@ class FileBrowserService {
   /// only — it never appears as a file-browser root. Used by "Add folder to
   /// library".
   Future<FileEntry?> pickLibraryFolder() async {
-    final result =
-        await _channel.invokeMapMethod<dynamic, dynamic>('pickLibraryFolder');
+    final result = await _channel.invokeMapMethod<dynamic, dynamic>(
+      'pickLibraryFolder',
+    );
     if (result == null) return null;
     return FileEntry.fromMap(result);
   }
@@ -105,7 +179,9 @@ class FileBrowserService {
   /// (iCloud Drive, On My iPad, Downloads, providers). Returns the picked
   /// video, imported (bookmarked) for future sessions, or null if cancelled.
   Future<FileEntry?> openFilesHome() async {
-    final result = await _channel.invokeMapMethod<dynamic, dynamic>('openFilesHome');
+    final result = await _channel.invokeMapMethod<dynamic, dynamic>(
+      'openFilesHome',
+    );
     if (result == null) return null;
     return FileEntry.fromMap(result);
   }
@@ -168,5 +244,4 @@ class FileBrowserService {
       return null;
     }
   }
-
 }

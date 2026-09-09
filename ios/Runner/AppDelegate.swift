@@ -74,5 +74,13 @@ import Network
     JellyfinDiscovery.register(with: messenger)
     CacheCleaner.register(with: messenger)
     UpnpClient.register(with: messenger)
+    FlutterMethodChannel(name: "dreamplayer/app_info", binaryMessenger: messenger)
+      .setMethodCallHandler { call, result in
+        if call.method == "version" {
+          result(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+        } else {
+          result(FlutterMethodNotImplemented)
+        }
+      }
   }
 }

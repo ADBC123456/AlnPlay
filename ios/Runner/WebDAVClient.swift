@@ -25,7 +25,7 @@ final class WebDAVClient: NSObject {
 
     private static let videoExtensions: Set<String> = [
         "mkv", "mp4", "mov", "avi", "webm", "m4v", "ts", "m2ts", "mts",
-        "wmv", "flv", "mpg", "mpeg", "3gp", "3g2", "vob", "divx", "xvid", "m2v",
+        "wmv", "flv", "mpg", "mpeg", "3gp", "3g2", "vob", "divx", "xvid", "m2v", "strm",
     ]
 
     // MARK: - Networking
@@ -134,13 +134,15 @@ final class WebDAVClient: NSObject {
             let server = (args?["id"] as? String).flatMap { serverById($0) }
             let headers = (args?["headers"] as? [String: String]) ?? [:]
             let allowSelfSigned = (args?["allowSelfSigned"] as? Bool) ?? false
+            let maxBytes = (args?["maxBytes"] as? NSNumber)?.intValue
             Task.detached { [weak self] in
                 guard let self else { return }
                 do {
                     let bytes = try await self.fetch(url: url,
                                                      server: server,
                                                      extraHeaders: headers,
-                                                     allowSelfSigned: allowSelfSigned)
+                                                     allowSelfSigned: allowSelfSigned,
+                                                     maxBytes: maxBytes)
                     if let bytes {
                         self.respond(result, FlutterStandardTypedData(bytes: bytes))
                     } else {
@@ -157,7 +159,7 @@ final class WebDAVClient: NSObject {
 
     /// Authenticated GET: returns body bytes on HTTP 200, nil on any other
     /// status (404/403/5xx) so the caller treats a miss as "no sidecar".
-    private func fetch(url: String, server: Server?, extraHeaders: [String: String], allowSelfSigned: Bool) async throws -> Data? {
+    private func fetch(url: String, server: Server?, extraHeaders: [String: String], allowSelfSigned: Bool, maxBytes: Int? = nil) async throws -> Data? {
         guard let u = URL(string: url) else { throw URLError(.badURL) }
         var request = URLRequest(url: u)
         request.httpMethod = "GET"
@@ -166,16 +168,31 @@ final class WebDAVClient: NSObject {
             request.setValue(server.authorizationHeader, forHTTPHeaderField: "Authorization")
             for (k, v) in extraHeaders { request.setValue(v, forHTTPHeaderField: k) }
             let session = server.allowSelfSigned ? permissiveSession : standardSession
-            let (data, response) = try await session.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-            return data
+            return try await boundedFetch(session: session, request: request, maxBytes: maxBytes)
         } else {
             for (k, v) in extraHeaders { request.setValue(v, forHTTPHeaderField: k) }
             let session = allowSelfSigned ? permissiveSession : standardSession
-            let (data, response) = try await session.data(for: request)
+            return try await boundedFetch(session: session, request: request, maxBytes: maxBytes)
+        }
+    }
+
+    /// Streams bounded reads so a large response cannot be buffered before the
+    /// 64 KiB STRM limit is checked. Unbounded calls retain the subtitle cap.
+    private func boundedFetch(session: URLSession, request: URLRequest, maxBytes: Int?) async throws -> Data? {
+        let limit = maxBytes.map { min(max($0, 0), 64 * 1024) } ?? 50 * 1024 * 1024
+        if maxBytes != nil {
+            let (stream, response) = try await session.bytes(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            var data = Data()
+            for try await byte in stream {
+                if data.count >= limit { return nil }
+                data.append(byte)
+            }
             return data
         }
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return data.count > limit ? nil : data
     }
 
     /// `FlutterResult` must be called on the main thread; networking runs on

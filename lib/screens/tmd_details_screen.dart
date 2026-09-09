@@ -6,14 +6,15 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
 import '../danmaku/scraper/scrape_state.dart';
+import '../library/source/strm_file.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/resume_store.dart';
+import '../services/strm_playback.dart';
 import '../services/tmdb_client.dart';
 import '../services/watched_store.dart';
 import '../utils/codec_info.dart';
-import '../utils/file_info_extractor.dart';
 import '../utils/season_group.dart' as sg;
 import '../widgets/season_progress_ring.dart';
 import '../widgets/tv_tile.dart';
@@ -554,10 +555,25 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
     bool fromBeginning = false,
     PlayEngine engine = PlayEngine.media3,
   }) async {
+    late final VideoItem video;
+    try {
+      video = await refreshStrmPlayback(widget.video!);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: AppText(
+            'Could not open video. Check the source and try again.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlayerScreen(
-          video: widget.video!,
+          video: video,
           startFromBeginning: fromBeginning,
           initialEngine: engine,
         ),
@@ -659,7 +675,24 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
       await _loadDetailsAndSeasons();
       return;
     }
-    final video = _toVideoItem(entry);
+    late final VideoItem video;
+    try {
+      video = await entry.resolvePlayable(
+        id: 'folder_${widget.folder!.id}_${entry.playbackIdentity.hashCode}',
+      );
+    } on StrmFormatException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      return;
+    } on PlatformException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This STRM file could not be read')),
+      );
+      return;
+    }
     final meta = _service.metaFor(_identityKey);
     final videoKey = TmdStore.identityKeyFor(video);
     final isEpisode = ParsedFileName.parse(entry.name).isEpisode;
@@ -690,21 +723,8 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
   }
 
   VideoItem _toVideoItem(FileEntry entry) {
-    final isContentUri = entry.path.startsWith('content://');
-    final info = extractFileInfo(entry.name);
-    return VideoItem(
-      id: 'folder_${widget.folder!.id}_${entry.path.hashCode}',
-      title: entry.name,
-      path: isContentUri ? null : entry.path,
-      uri: isContentUri ? entry.path : null,
-      resumeKey: entry.resumeKey,
-      duration: Duration.zero,
-      sizeBytes: entry.size,
-      videoCodec: info.videoCodec,
-      audioCodec: info.audioCodec,
-      audioChannels: info.audioChannels,
-      resolution: info.resolution,
-      hdrHint: info.hdrHint,
+    return entry.toVideoItem(
+      id: 'folder_${widget.folder!.id}_${entry.playbackIdentity.hashCode}',
     );
   }
 

@@ -3,6 +3,20 @@
 All notable changes to AlnPlay are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 1.1.0
+
+### Added
+
+- **Cache capacity controls** — choose 1, 2, 5 (default), 10, 50 GB or unlimited. Regenerable disk caches share an LRU budget with serialized writes and Android native subtitle reservations. Active playback files stay protected until engine teardown; library data, watch history, source videos/STRM and persistent subtitle downloads are not removed.
+- **GitHub update checks** — daily background checks and a manual settings entry for AlnPlay's latest stable release, with native installed-version detection, release notes/date, ETag support, rate-limit cooldown and per-version notification deduplication. Opens the validated release page; iOS still uses external IPA sideloading.
+- **Bounded recursive library scanning** — configurable per-root depth (1–20, default 6), filename-first matching supplemented by show/season ancestor folders, including Chinese season names. Unknown seasons no longer become specials. Partial, failed and cancelled scans retain existing records; manual corrections reject stale automatic matches.
+- **External STRM files** — local/SAF/iOS bookmark and WebDAV support for a single HTTP(S) target in a bounded 64 KiB UTF-8 file. Scanning reads only the pointer, playback refreshes its target, and history retains the source identity without saving signed target URLs. Direct cloud-provider integrations remain deferred.
+
+### Fixed
+
+- **Root Dock and source actions** — draggable local-atlas refracting lens, separate search and keyboard-aware visibility; Add Source is now in the source page's top app bar instead of behind the Dock.
+- **iPad details layout** — full-width hero/content with consistent safe margins for back navigation, metadata, description and episodes; existing episode centering is retained.
+
 ## 1.0.1
 
 ### Fixed

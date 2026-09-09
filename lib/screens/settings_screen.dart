@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auto_play_store.dart';
 import '../services/badge_prefs.dart';
 import '../services/cache_cleaner.dart';
+import '../services/cache_quota_manager.dart';
+import '../widgets/update_settings_tile.dart';
 import '../services/decoder_mode.dart';
 import '../services/exo_player.dart';
 import '../services/opensubtitles_client.dart';
@@ -537,6 +539,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() => _diskBytes = size);
   }
 
+  Future<void> _pickCacheLimit() async {
+    final quota = CacheQuotaManager.instance;
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const AppText('Cache limit'),
+        children: [
+          for (final gb in CacheQuotaManager.choices)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, gb),
+              child: Row(
+                children: [
+                  Icon(
+                    quota.limitBytes == gb * CacheQuotaManager.gib
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                  ),
+                  const SizedBox(width: 12),
+                  AppText(gb == 0 ? 'Unlimited' : '$gb GB'),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected == null) return;
+    try {
+      await quota.setLimit(selected * CacheQuotaManager.gib);
+      await _refreshDiskSize();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: AppText('Could not change cache limit.')),
+        );
+      }
+    }
+  }
+
   Future<void> _clearCache() async {
     final totalBytes = _diskBytes + CacheCleaner.memoryBytes();
     final confirmed = await showDialog<bool>(
@@ -561,13 +601,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    await CacheCleaner.clearDisk();
+    try {
+      await CacheQuotaManager.instance.clear();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: AppText('Could not clear cache.')),
+        );
+      }
+      return;
+    }
     CacheCleaner.clearMemoryImages();
     if (!mounted) return;
-    setState(() => _cleared = true);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: AppText('Cache cleared')));
+    final pending = CacheQuotaManager.instance.pendingClear;
+    setState(() => _cleared = !pending);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: AppText(
+          pending
+              ? 'Active playback files will be cleared after playback.'
+              : 'Cache cleared',
+        ),
+      ),
+    );
     await _refreshDiskSize();
   }
 
@@ -602,6 +658,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               onTap: _pickAppLanguage,
             ),
+            const UpdateSettingsTile(),
             const Divider(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
@@ -645,6 +702,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           '${CacheCleaner.formatBytes(CacheCleaner.memoryBytes())} in memory',
               ),
               onTap: _clearCache,
+            ),
+            ListenableBuilder(
+              listenable: CacheQuotaManager.instance,
+              builder: (context, _) {
+                final quota = CacheQuotaManager.instance;
+                return TvTile(
+                  leading: const Icon(Icons.storage_outlined),
+                  title: const AppText('Cache limit'),
+                  subtitle: Text(
+                    '${CacheCleaner.formatBytes(quota.usedBytes)} / '
+                    '${quota.limitBytes == 0 ? context.tr('Unlimited') : CacheCleaner.formatBytes(quota.limitBytes)}\n'
+                    '${context.tr(quota.overLimit ? 'Active playback files will be cleared after playback.' : 'Limits temporary files, images and danmaku; keeps your library and watch history.')}',
+                  ),
+                  onTap: _pickCacheLimit,
+                );
+              },
             ),
             if (defaultTargetPlatform == TargetPlatform.android) ...[
               const Divider(),

@@ -1,13 +1,12 @@
 import Flutter
 import Foundation
 
-/// Clears the app's on-disk cache on demand (the `dreamplayer/cache` channel).
-/// Deletes the contents of the app's Caches directory and tmp — subtitle temp
-/// files and anything AetherEngine/FFmpeg dropped there. Both directories are
-/// OS-purgeable, so deleting them is always safe. The in-memory image cache
-/// (TMDB posters/backdrops/stills) lives in Flutter and is cleared from Dart
-/// (`CacheCleaner.clearMemoryImages`).
+/// Legacy cache channel, restricted to known regenerable AlnPlay directories.
+/// Dart owns quota eviction and playback leases. Never wipe the entire Caches
+/// or tmp tree: unknown engine files and user-owned files are out of scope.
 enum CacheCleaner {
+    private static var playbackActive = false
+    private static let managedNames = ["danmaku", "cover_art", "sidecar_subs", "opensubs", "native_subtitles"]
 
     static func register(with messenger: FlutterBinaryMessenger) {
         let channel = FlutterMethodChannel(
@@ -16,10 +15,21 @@ enum CacheCleaner {
         )
         channel.setMethodCallHandler { call, result in
             switch call.method {
+            case "policy":
+                let args = call.arguments as? [String: Any]
+                playbackActive = args?["playbackActive"] as? Bool ?? false
+                result(nil)
             case "size":
-                result(diskSizeBytes())
+                DispatchQueue.global(qos: .utility).async {
+                    let bytes = diskSizeBytes()
+                    DispatchQueue.main.async { result(bytes) }
+                }
             case "clear":
-                result(clearCacheBytes())
+                if playbackActive { result(Int64(0)); return }
+                DispatchQueue.global(qos: .utility).async {
+                    let bytes = clearCacheBytes()
+                    DispatchQueue.main.async { result(bytes) }
+                }
             default:
                 result(FlutterMethodNotImplemented)
             }
@@ -32,7 +42,7 @@ enum CacheCleaner {
             urls.append(caches)
         }
         urls.append(FileManager.default.temporaryDirectory)
-        return urls
+        return urls.flatMap { root in managedNames.map { root.appendingPathComponent($0, isDirectory: true) } }
     }
 
     private static func diskSizeBytes() -> Int64 {
@@ -40,6 +50,7 @@ enum CacheCleaner {
         for dir in cacheDirectories {
             if let enumerator = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey]) {
                 for case let url as URL in enumerator {
+                    if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { continue }
                     guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
                           values.isDirectory != true,
                           let size = values.fileSize else { continue }
@@ -59,6 +70,7 @@ enum CacheCleaner {
                 options: [.skipsHiddenFiles]
             ) else { continue }
             for case let url as URL in enumerator {
+                if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { continue }
                 let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
                 if isDirectory {
                     continue

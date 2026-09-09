@@ -3,8 +3,9 @@ import 'dart:collection';
 
 import '../models/library_models.dart';
 import '../repository/library_repository.dart';
+import '../source/strm_file.dart';
 
-enum ScanState { queued, scanning, complete, failed, cancelled }
+enum ScanState { queued, scanning, partial, complete, failed, cancelled }
 
 class ScanProgress {
   const ScanProgress({
@@ -39,6 +40,8 @@ class CoordinatedLibraryScanner implements LibraryScanner {
 
   static const int batchSize = 100;
   static const Duration batchInterval = Duration(seconds: 1);
+  static const Duration listingTimeout = Duration(seconds: 30);
+  static const Duration smallTextTimeout = Duration(seconds: 10);
 
   final LibraryRepository repository;
   final Map<String, LibrarySourceAdapter> _adapters;
@@ -113,12 +116,15 @@ class CoordinatedLibraryScanner implements LibraryScanner {
     );
 
     final queue = Queue<_QueuedDirectory>()
-      ..add(_QueuedDirectory(root.directory, const []));
+      ..add(_QueuedDirectory(root.directory, const [], 0));
     final visited = <String>{};
     final seen = <String>{};
     final staged = <MatchResult>[];
     final identifying = <Future<void>>[];
     var lastFlush = _clock();
+    var isPartial = false;
+    Object? partialError;
+    var acceptingMetadata = true;
 
     Future<void> flush() async {
       if (staged.isEmpty) return;
@@ -149,25 +155,43 @@ class CoordinatedLibraryScanner implements LibraryScanner {
         final canonical = _canonicalDirectory(queued.directory);
         if (!visited.add(canonical)) continue;
         String? cursor;
+        final seenCursors = <String>{};
         do {
           _checkCancelled(root.id);
-          final page = await adapter.list(queued.directory, cursor: cursor);
+          ListingPage page;
+          try {
+            page = await adapter
+                .list(queued.directory, cursor: cursor)
+                .timeout(listingTimeout);
+          } catch (error) {
+            if (queued.depth == 0 && seen.isEmpty) rethrow;
+            isPartial = true;
+            partialError ??= error;
+            break;
+          }
           for (final entry in page.entries) {
             _checkCancelled(root.id);
             if (entry.isDirectory) {
               if (entry.directory != null) {
-                queue.add(
-                  _QueuedDirectory(entry.directory!, [
-                    ...queued.ancestors,
-                    if ((queued.directory.contextName ?? '').isNotEmpty)
-                      queued.directory.contextName!,
-                  ]),
-                );
+                if (queued.depth >= root.maxScanDepth) {
+                  isPartial = true;
+                  partialError ??= StateError(
+                    'Scan depth limit ${root.maxScanDepth} reached',
+                  );
+                } else {
+                  queue.add(
+                    _QueuedDirectory(entry.directory!, [
+                      ...queued.ancestors,
+                      if ((queued.directory.contextName ?? '').isNotEmpty)
+                        queued.directory.contextName!,
+                    ], queued.depth + 1),
+                  );
+                }
               }
               continue;
             }
             final sourceRef = entry.sourceRef;
-            if (sourceRef == null || !_isSupportedVideo(entry.name)) continue;
+            if (sourceRef == null || !_isSupportedMedia(entry.name)) continue;
             final file = MediaFile(
               id: entry.stableId,
               rootIds: {root.id},
@@ -187,12 +211,37 @@ class CoordinatedLibraryScanner implements LibraryScanner {
                   : MatchOrigin.server,
               availability: MediaAvailability.available,
               legacyResumeKey: entry.legacyResumeKey ?? entry.stableId,
+              isStrm: entry.isStrm || isStrmFileName(entry.name),
             );
             seen.add(file.id);
-            // Persist discovery independently of metadata lookup. A slow or
-            // unavailable TMDB endpoint must never make an enumerated file
-            // disappear from the index.
+            // Persist discovery before optional STRM validation and metadata.
             staged.add(MatchResult(file: file));
+            if (file.isStrm) {
+              final SmallTextLibrarySourceAdapter? reader =
+                  adapter is SmallTextLibrarySourceAdapter
+                  ? adapter as SmallTextLibrarySourceAdapter
+                  : null;
+              try {
+                if (reader == null) {
+                  throw StateError('Source does not support STRM text reads');
+                }
+                parseExternalStrm(
+                  await reader.readSmallText(file).timeout(smallTextTimeout) ??
+                      '',
+                );
+              } catch (error) {
+                isPartial = true;
+                partialError ??= error;
+                staged.add(
+                  MatchResult(
+                    file: file.copyWith(
+                      identificationState: MetadataState.failed,
+                    ),
+                  ),
+                );
+                continue;
+              }
+            }
             final context = DiscoveryContext(
               rootId: root.id,
               directoryNames: List.unmodifiable([
@@ -204,6 +253,7 @@ class CoordinatedLibraryScanner implements LibraryScanner {
             final task = metadataResolver.resolve(file, context).then((
               result,
             ) async {
+              if (!acceptingMetadata || _cancelled.contains(root.id)) return;
               staged.add(result);
               if (staged.length >= batchSize ||
                   _clock().difference(lastFlush) >= batchInterval) {
@@ -211,6 +261,11 @@ class CoordinatedLibraryScanner implements LibraryScanner {
               }
             });
             identifying.add(task);
+            if (identifying.length >= 32) {
+              await Future.wait(identifying);
+              identifying.clear();
+              _checkCancelled(root.id);
+            }
             _progress.add(
               ScanProgress(
                 rootId: root.id,
@@ -220,28 +275,37 @@ class CoordinatedLibraryScanner implements LibraryScanner {
             );
           }
           cursor = page.nextCursor;
+          if (cursor != null && cursor.isNotEmpty && !seenCursors.add(cursor)) {
+            isPartial = true;
+            partialError ??= StateError('Source returned a repeated cursor');
+            break;
+          }
         } while (cursor != null && cursor.isNotEmpty);
       }
       await flush();
       await Future.wait(identifying);
       await flush();
       _checkCancelled(root.id);
-      await repository.applyScanBatch(
-        ScanBatch(
-          rootId: root.id,
-          generation: generation,
-          isRootComplete: true,
-          seenFileIds: seen,
-        ),
-      );
+      if (!isPartial) {
+        await repository.applyScanBatch(
+          ScanBatch(
+            rootId: root.id,
+            generation: generation,
+            isRootComplete: true,
+            seenFileIds: seen,
+          ),
+        );
+      }
       _progress.add(
         ScanProgress(
           rootId: root.id,
-          state: ScanState.complete,
+          state: isPartial ? ScanState.partial : ScanState.complete,
           discoveredFiles: seen.length,
+          error: partialError,
         ),
       );
     } on _ScanCancelled {
+      acceptingMetadata = false;
       _progress.add(
         ScanProgress(
           rootId: root.id,
@@ -250,6 +314,7 @@ class CoordinatedLibraryScanner implements LibraryScanner {
         ),
       );
     } catch (error) {
+      acceptingMetadata = false;
       // No completion batch means old records are retained for this root.
       _progress.add(
         ScanProgress(
@@ -270,9 +335,9 @@ class CoordinatedLibraryScanner implements LibraryScanner {
   }
 
   static String _canonicalDirectory(SourceDirectory directory) =>
-      '${directory.sourceId}:${directory.identity.replaceAll('\\', '/').toLowerCase()}';
+      '${directory.sourceId}:${directory.identity.replaceAll('\\', '/')}';
 
-  static bool _isSupportedVideo(String name) {
+  static bool _isSupportedMedia(String name) {
     final dot = name.lastIndexOf('.');
     if (dot < 0) return false;
     return const {
@@ -292,15 +357,17 @@ class CoordinatedLibraryScanner implements LibraryScanner {
       'ts',
       'm2ts',
       'mts',
+      'strm',
     }.contains(name.substring(dot + 1).toLowerCase());
   }
 }
 
 class _QueuedDirectory {
-  const _QueuedDirectory(this.directory, this.ancestors);
+  const _QueuedDirectory(this.directory, this.ancestors, this.depth);
 
   final SourceDirectory directory;
   final List<String> ancestors;
+  final int depth;
 }
 
 class _ScanCancelled implements Exception {

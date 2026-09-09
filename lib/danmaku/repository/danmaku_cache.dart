@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
+import '../../services/cache_quota_manager.dart';
 
 import '../source/danmaku_source_registry.dart';
 
@@ -113,7 +114,12 @@ class DanmakuCache {
   /// [directory] overrides the cache root (test seam). Production callers use
   /// the default constructor which needs a directory supplied via [open] or
   /// [setDirectory].
-  DanmakuCache({Directory? directory}) : _root = directory;
+  DanmakuCache({Directory? directory, bool? useQuota})
+    : _root = directory,
+      _useQuota = useQuota ?? directory == null;
+
+  final bool _useQuota;
+  int _quotaRevision = 0;
 
   Directory? _root;
 
@@ -165,17 +171,26 @@ class DanmakuCache {
     required String baseUrl,
     required String videoIdentity,
   }) async {
+    if (_useQuota &&
+        _quotaRevision != CacheQuotaManager.instance.evictionRevision) {
+      _memory.clear();
+      _quotaRevision = CacheQuotaManager.instance.evictionRevision;
+    }
     final key = keyFor(
       sourceId: sourceId,
       baseUrl: baseUrl,
       videoIdentity: videoIdentity,
     );
     final memo = _memory[key];
-    if (memo != null) return memo;
+    if (memo != null) {
+      if (_useQuota) await CacheQuotaManager.instance.touch(_filePath(key));
+      return memo;
+    }
     try {
       final file = File(_filePath(key));
       if (!await file.exists()) return null;
       final text = await file.readAsString();
+      if (_useQuota) await CacheQuotaManager.instance.touch(file.path);
       final decoded = jsonDecode(text);
       if (decoded is! Map<String, dynamic>) return null;
       final entry = DanmakuCacheEntry.fromJson(decoded);
@@ -202,6 +217,15 @@ class DanmakuCache {
       videoIdentity: entry.videoKey,
     );
     final path = _filePath(key);
+    if (_useQuota) {
+      if (await CacheQuotaManager.instance.write(
+        File(path),
+        utf8.encode(jsonEncode(entry.toJson())),
+      )) {
+        _memory[key] = entry;
+      }
+      return;
+    }
     final tmp = File('$path.tmp');
     try {
       await tmp.parent.create(recursive: true);
@@ -281,5 +305,5 @@ class DanmakuCache {
 /// cache root with `DanmakuCache(directory: ...)` directly.
 Future<DanmakuCache> createDefaultDanmakuCache() async {
   final appDir = await getApplicationCacheDirectory();
-  return DanmakuCache(directory: appDir);
+  return DanmakuCache(directory: appDir, useQuota: true);
 }

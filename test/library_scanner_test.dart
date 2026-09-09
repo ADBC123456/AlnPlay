@@ -22,7 +22,7 @@ void main() {
   });
 
   test(
-    'recurses without a depth limit, follows pages, and breaks loops',
+    'recurses to the configured depth, follows pages, and breaks loops',
     () async {
       final adapter = _FakeAdapter(
         sourceId: 'source:a',
@@ -72,6 +72,59 @@ void main() {
       await subscription.cancel();
     },
   );
+
+  test('depth-limited scan is partial and keeps unseen old files', () async {
+    await repository.applyScanBatch(
+      const ScanBatch(rootId: 'root-id', generation: 'seed', isStart: true),
+    );
+    await repository.applyScanBatch(
+      ScanBatch(
+        rootId: 'root-id',
+        generation: 'seed',
+        files: [_indexedFile('source:a:old.mkv')],
+      ),
+    );
+    final adapter = _FakeAdapter(
+      sourceId: 'source:a',
+      pages: {
+        'root|': ListingPage(entries: [_directoryEntry('level-1')]),
+        'level-1|': ListingPage(entries: [_directoryEntry('level-2')]),
+      },
+    );
+    final scanner = CoordinatedLibraryScanner(
+      repository: repository,
+      adapters: [adapter],
+      metadataResolver: const _PassthroughResolver(),
+    );
+    final partial = Completer<ScanProgress>();
+    final subscription = scanner.progress.listen((event) {
+      if (event.state == ScanState.partial && !partial.isCompleted) {
+        partial.complete(event);
+      }
+    });
+
+    await scanner.refreshRoots([
+      LibraryRoot(
+        id: 'root-id',
+        sourceId: adapter.sourceId,
+        displayName: 'root',
+        maxScanDepth: 1,
+        directory: const SourceDirectory(
+          sourceId: 'source:a',
+          sourceType: 'test',
+          identity: 'root',
+          path: 'root',
+        ),
+      ),
+    ]);
+    expect((await partial.future).error, isNotNull);
+    expect(
+      (await repository.snapshot()).files['source:a:old.mkv']!.availability,
+      MediaAvailability.available,
+    );
+    expect(adapter.calls, isNot(contains('level-2|')));
+    await subscription.cancel();
+  });
 
   test(
     'ignores unsupported files and preserves old data on source failure',
@@ -180,6 +233,68 @@ void main() {
       MetadataState.noMatch,
     );
   });
+
+  test('a bad STRM is partial but does not stop sibling discovery', () async {
+    final adapter = _FakeAdapter(
+      sourceId: 'source:a',
+      smallText: 'ftp://unsupported/movie.mkv',
+      pages: {
+        'root|': ListingPage(
+          entries: [
+            _videoEntry('bad.strm', isStrm: true),
+            _videoEntry('good.mkv'),
+          ],
+        ),
+      },
+    );
+    final scanner = CoordinatedLibraryScanner(
+      repository: repository,
+      adapters: [adapter],
+      metadataResolver: const _PassthroughResolver(),
+    );
+    final states = <ScanState>[];
+    final subscription = scanner.progress.listen(
+      (event) => states.add(event.state),
+    );
+
+    await scanner.refreshRoots([_root('root-id', adapter.sourceId)]);
+    final files = (await repository.snapshot()).files;
+    expect(files.keys, containsAll(['source:a:bad.strm', 'source:a:good.mkv']));
+    expect(
+      files['source:a:bad.strm']!.identificationState,
+      MetadataState.failed,
+    );
+    expect(states, contains(ScanState.partial));
+    await subscription.cancel();
+  });
+
+  test('cancelled metadata request cannot append a late result', () async {
+    final adapter = _FakeAdapter(
+      sourceId: 'source:a',
+      pages: {
+        'root|': ListingPage(entries: [_videoEntry('slow.mkv')]),
+      },
+    );
+    final resolver = _BlockingResolver();
+    final scanner = CoordinatedLibraryScanner(
+      repository: repository,
+      adapters: [adapter],
+      metadataResolver: resolver,
+    );
+    final scan = scanner.refreshRoots([_root('root-id', adapter.sourceId)]);
+    await repository.watch().firstWhere(
+      (snapshot) => snapshot.files.containsKey('source:a:slow.mkv'),
+    );
+    scanner.cancel('root-id');
+    resolver.release.complete();
+    await scan;
+    expect(
+      (await repository.snapshot())
+          .files['source:a:slow.mkv']!
+          .identificationState,
+      MetadataState.unresolved,
+    );
+  });
 }
 
 LibraryRoot _root(String id, String sourceId) => LibraryRoot(
@@ -208,19 +323,23 @@ SourceEntry _directoryEntry(String name, {String? identity}) => SourceEntry(
   ),
 );
 
-SourceEntry _videoEntry(String name, {String sourceId = 'source:a'}) =>
-    SourceEntry(
-      name: name,
-      stableId: '$sourceId:$name',
-      isDirectory: false,
-      sourceRef: MediaSourceRef(
-        sourceId: sourceId,
-        sourceType: 'test',
-        path: '/$name',
-      ),
-      sizeBytes: 123,
-      legacyResumeKey: '$sourceId:$name',
-    );
+SourceEntry _videoEntry(
+  String name, {
+  String sourceId = 'source:a',
+  bool isStrm = false,
+}) => SourceEntry(
+  name: name,
+  stableId: '$sourceId:$name',
+  isDirectory: false,
+  sourceRef: MediaSourceRef(
+    sourceId: sourceId,
+    sourceType: 'test',
+    path: '/$name',
+  ),
+  sizeBytes: 123,
+  legacyResumeKey: '$sourceId:$name',
+  isStrm: isStrm,
+);
 
 MediaFile _indexedFile(String id) => MediaFile(
   id: id,
@@ -255,13 +374,20 @@ class _BlockingResolver implements MetadataResolver {
   }
 }
 
-class _FakeAdapter implements LibrarySourceAdapter {
-  _FakeAdapter({required this.sourceId, required this.pages, this.error});
+class _FakeAdapter
+    implements LibrarySourceAdapter, SmallTextLibrarySourceAdapter {
+  _FakeAdapter({
+    required this.sourceId,
+    required this.pages,
+    this.error,
+    this.smallText = 'https://example.test/video.mkv',
+  });
 
   @override
   final String sourceId;
   final Map<String, ListingPage> pages;
   final Object? error;
+  final String smallText;
   final List<String> calls = [];
 
   @override
@@ -276,4 +402,8 @@ class _FakeAdapter implements LibrarySourceAdapter {
   Future<VideoItem> resolvePlayable(MediaFile file) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<String?> readSmallText(MediaFile file, {int maxBytes = 65536}) async =>
+      smallText;
 }

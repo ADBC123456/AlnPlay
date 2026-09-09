@@ -171,6 +171,26 @@ void main() {
       expect(result.title?.displayTitle, 'Pinned Show');
     },
   );
+
+  test(
+    'numeric episode without a season stays unresolved without searching',
+    () async {
+      final api = _FolderPinnedApi();
+      final resolver = TmdbLibraryMetadataResolver(
+        repository: repository,
+        api: api,
+      );
+
+      final result = await resolver.resolve(
+        _file('03.mkv'),
+        const DiscoveryContext(directoryNames: ['凡人修仙传']),
+      );
+
+      expect(result.file.identificationState, MetadataState.needsReview);
+      expect(result.file.episodeId, isNull);
+      expect(api.searchCalls, 0);
+    },
+  );
 }
 
 MediaFile _file(String name) => MediaFile(

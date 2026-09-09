@@ -581,6 +581,7 @@ class ParsedFileName {
     this.seriesName,
     this.season = 0,
     this.episode = 0,
+    this.seasonKnown = false,
   });
 
   final String title;
@@ -593,6 +594,7 @@ class ParsedFileName {
 
   /// Episode number parsed from `SxxEyy` / `x.yy` (0 for movies).
   final int episode;
+  final bool seasonKnown;
 
   /// `S02E04`-style label; empty for movies.
   String get episodeLabel => isEpisode
@@ -612,6 +614,160 @@ class ParsedFileName {
     r'\b(\d{1,2})x(\d{1,4})\b',
     caseSensitive: false,
   );
+  static final RegExp _looseEpisodePattern = RegExp(
+    r'^(?:(.*?)[ ._-]+)?(?:E(?:P)?(?:ISODE)?[ ._-]*|第[ ]*)?(\d{1,4})(?:[ ]*集)?$',
+    caseSensitive: false,
+  );
+  static final RegExp _ancestorSeasonPattern = RegExp(
+    r'^(?:S(?:EASON)?[ ._-]*|第[ ]*)(\d{1,2})(?:[ ]*季)?$',
+    caseSensitive: false,
+  );
+  static final RegExp _chineseSeasonPattern = RegExp(r'^第([一二三四五六七八九十]+)季$');
+  static const Set<String> _containerDirectoryNames = {
+    'tv',
+    'tv shows',
+    'shows',
+    'series',
+    'anime',
+    'animation',
+    '电视剧',
+    '电视',
+    '剧集',
+    '连续剧',
+    '动漫',
+    '动画',
+    'movies',
+    'movie',
+    'films',
+    '电影',
+    '影片',
+    'media',
+    'video',
+    'videos',
+    '影视',
+    '视频',
+    '4k',
+    'uhd',
+  };
+
+  /// Infuse-style parsing that supplements a filename with only its own
+  /// root-scoped ancestor chain. [ancestors] is ordered root-nearest first and
+  /// must not contain directories outside the selected library root.
+  static ParsedFileName parseWithAncestors(
+    String fileName,
+    List<String> ancestors,
+  ) {
+    final base = parse(fileName);
+    final stem = _withoutExtension(fileName).trim();
+    final loose = _looseEpisodePattern.firstMatch(stem);
+    final looseNumber = loose == null ? null : int.parse(loose.group(2)!);
+    final looseLooksLikeYear =
+        loose != null &&
+        (loose.group(1)?.trim().isNotEmpty ?? false) &&
+        looseNumber! >= 1800 &&
+        looseNumber <= 2099;
+    final explicitEpisode =
+        base.isEpisode || (loose != null && !looseLooksLikeYear);
+    if (!explicitEpisode) return base;
+
+    var season = base.season;
+    var seasonKnown = base.seasonKnown;
+    String? ancestorTitle;
+    int? ancestorYear;
+    for (final raw in ancestors.reversed) {
+      final name = raw.trim();
+      if (name.isEmpty) continue;
+      final seasonMatch = _ancestorSeasonPattern.firstMatch(name);
+      if (seasonMatch != null) {
+        if (!seasonKnown) {
+          season = int.parse(seasonMatch.group(1)!);
+          seasonKnown = true;
+        }
+        continue;
+      }
+      final chineseSeason = _chineseSeasonPattern.firstMatch(name);
+      if (chineseSeason != null) {
+        if (!seasonKnown) {
+          season = _parseChineseNumber(chineseSeason.group(1)!) ?? season;
+          seasonKnown = true;
+        }
+        continue;
+      }
+      if (_isContainerDirectory(name)) continue;
+      final parsed = parse(name);
+      final candidate = (parsed.seriesName?.isNotEmpty ?? false)
+          ? parsed.seriesName!
+          : parsed.title;
+      if (candidate.isNotEmpty && !_isContainerDirectory(candidate)) {
+        ancestorTitle = candidate;
+        ancestorYear = parsed.year;
+        break;
+      }
+    }
+
+    var episode = base.episode;
+    String? fileSeries = base.seriesName;
+    if (loose != null && !looseLooksLikeYear) {
+      episode = looseNumber!;
+      final prefix = _cleanName(loose.group(1) ?? '');
+      if (prefix.isNotEmpty && !_isContainerDirectory(prefix)) {
+        fileSeries = prefix;
+      }
+    }
+    final series = (fileSeries?.isNotEmpty ?? false)
+        ? _cleanName(fileSeries!)
+        : ancestorTitle;
+    return ParsedFileName(
+      title: series ?? base.title,
+      year: base.year ?? ancestorYear,
+      isEpisode: episode > 0,
+      seriesName: series,
+      season: season,
+      episode: episode,
+      seasonKnown: seasonKnown,
+    );
+  }
+
+  static bool isSeasonDirectory(String name) =>
+      _ancestorSeasonPattern.hasMatch(name.trim()) ||
+      _chineseSeasonPattern.hasMatch(name.trim());
+
+  static bool isContainerDirectory(String name) => _isContainerDirectory(name);
+
+  static bool _isContainerDirectory(String name) =>
+      _containerDirectoryNames.contains(_cleanName(name).toLowerCase());
+
+  static String _withoutExtension(String fileName) {
+    final dot = fileName.lastIndexOf('.');
+    if (dot <= 0) return fileName;
+    final ext = fileName.substring(dot + 1);
+    return ext.length <= 5 ? fileName.substring(0, dot) : fileName;
+  }
+
+  static int? _parseChineseNumber(String value) {
+    const digits = {
+      '一': 1,
+      '二': 2,
+      '三': 3,
+      '四': 4,
+      '五': 5,
+      '六': 6,
+      '七': 7,
+      '八': 8,
+      '九': 9,
+    };
+    if (value == '十') return 10;
+    final ten = value.indexOf('十');
+    if (ten >= 0) {
+      final tens = ten == 0 ? 1 : digits[value.substring(0, ten)];
+      final ones = ten == value.length - 1
+          ? 0
+          : digits[value.substring(ten + 1)];
+      if (tens == null || ones == null) return null;
+      return tens * 10 + ones;
+    }
+    return digits[value];
+  }
 
   /// Bare season tag (`S02`, `S1`) — used by TV-season folder names like
   /// `HOUSE.S02.1080p...`. There's no episode number, so this is a whole
@@ -770,15 +926,18 @@ class ParsedFileName {
     String? seriesName;
     var season = 0;
     var episode = 0;
+    var seasonKnown = false;
     if (episodeMatch != null) {
       isEpisode = true;
       season = int.parse(episodeMatch.group(1)!);
+      seasonKnown = true;
       episode = int.parse(episodeMatch.group(2)!);
       seriesName = name.substring(0, episodeMatch.start).trim();
       name = name.replaceAll(episodeMatch.group(0)!, ' ');
     } else if (shortEpisodeMatch != null) {
       isEpisode = true;
       season = int.parse(shortEpisodeMatch.group(1)!);
+      seasonKnown = true;
       episode = int.parse(shortEpisodeMatch.group(2)!);
       seriesName = name.substring(0, shortEpisodeMatch.start).trim();
       name = name.replaceAll(shortEpisodeMatch.group(0)!, ' ');
@@ -786,6 +945,7 @@ class ParsedFileName {
       // Whole-season folder (`Show.S02.1080p...`): keep the season number for
       // context but drop the tag so the cleaned title stays searchable.
       season = int.parse(seasonOnlyMatch.group(1)!);
+      seasonKnown = true;
       seriesName = name.substring(0, seasonOnlyMatch.start).trim();
       name = name.replaceAll(seasonOnlyMatch.group(0)!, ' ');
     }
@@ -820,6 +980,7 @@ class ParsedFileName {
           : _cleanName(effectiveSeriesName),
       season: season,
       episode: episode,
+      seasonKnown: seasonKnown,
     );
   }
 

@@ -129,9 +129,8 @@ object SubtitleFormats {
         if (charset == StandardCharsets.UTF_8) return uri
 
         val text = String(bytes, charset)
-        val temp = File(context.cacheDir, "dreamplayer_sub_${System.currentTimeMillis()}.utf8")
         return try {
-            temp.writeText(text, StandardCharsets.UTF_8)
+            val temp = CacheCleaner.writeSubtitle(context, text.toByteArray(StandardCharsets.UTF_8)) ?: return uri
             Uri.fromFile(temp)
         } catch (_: IOException) {
             uri

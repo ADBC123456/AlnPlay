@@ -64,6 +64,24 @@ class FileBrowser(private val activity: MainActivity) {
                         result.success(listDirectory(path))
                     }
                 }
+                "readSmallText" -> {
+                    val path = call.argument<String>("path")
+                    val maxBytes = (call.argument<Int>("maxBytes") ?: 65536).coerceIn(1, 65536)
+                    if (path == null) {
+                        result.error("bad_args", "Missing path", null)
+                    } else {
+                        Thread {
+                            try {
+                                val text = readSmallText(path, maxBytes)
+                                mainHandler.post { result.success(text) }
+                            } catch (e: SmallTextTooLargeException) {
+                                mainHandler.post { result.error("too_large", e.message, null) }
+                            } catch (e: Exception) {
+                                mainHandler.post { result.error("read_failed", e.message, null) }
+                            }
+                        }.start()
+                    }
+                }
                 "pickFolder" -> pickFolder(result)
                 "pickLibraryFolder" -> pickLibraryFolder(result)
                 "pickSubtitle" -> pickSubtitle(result)
@@ -173,7 +191,7 @@ class FileBrowser(private val activity: MainActivity) {
             if (name.startsWith(".")) continue
             if (f.isDirectory) {
                 dirs.add(entry(f, isDirectory = true))
-            } else if (isVideo(name)) {
+            } else if (isSupportedMediaEntry(name)) {
                 files.add(entry(f, isDirectory = false))
             }
         }
@@ -215,7 +233,7 @@ class FileBrowser(private val activity: MainActivity) {
                         "size" to 0L,
                     ),
                 )
-            } else if (isVideo(name)) {
+            } else if (isSupportedMediaEntry(name)) {
                 files.add(
                     mapOf(
                         "name" to name,
@@ -235,6 +253,39 @@ class FileBrowser(private val activity: MainActivity) {
         val dot = name.lastIndexOf('.')
         if (dot < 0 || dot == name.length - 1) return false
         return name.substring(dot + 1).lowercase(Locale.ROOT) in VIDEO_EXTENSIONS
+    }
+
+    private fun isSupportedMediaEntry(name: String): Boolean =
+        isVideo(name) || name.endsWith(".strm", ignoreCase = true)
+
+    private class SmallTextTooLargeException(message: String) : Exception(message)
+
+    private fun readSmallText(path: String, maxBytes: Int): String {
+        val input = if (path.startsWith("content://")) {
+            activity.contentResolver.openInputStream(Uri.parse(path))
+                ?: throw java.io.FileNotFoundException(path)
+        } else {
+            File(path).inputStream()
+        }
+        input.use { stream ->
+            val (bytes, used) = readBoundedBytes(stream, maxBytes)
+            if (used > maxBytes) throw SmallTextTooLargeException("Text file exceeds $maxBytes bytes")
+            return Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes, 0, used)).toString()
+        }
+    }
+
+    private fun readBoundedBytes(input: java.io.InputStream, maxBytes: Int): Pair<ByteArray, Int> {
+        val bytes = ByteArray(maxBytes + 1)
+        var used = 0
+        while (used < bytes.size) {
+            val read = input.read(bytes, used, bytes.size - used)
+            if (read < 0) break
+            used += read
+        }
+        return bytes to used
     }
 
     private fun entry(f: File, isDirectory: Boolean): Map<String, Any?> = mapOf(
@@ -447,9 +498,16 @@ class FileBrowser(private val activity: MainActivity) {
             try {
                 activity.contentResolver.openInputStream(uri)?.use { input ->
                     val ext = uri.lastPathSegment?.substringAfterLast('.', "srt") ?: "srt"
-                    val tmp = java.io.File(activity.cacheDir, "picked_sub_${System.currentTimeMillis()}.$ext")
-                    tmp.outputStream().use { out -> input.copyTo(out) }
-                    if (tmp.exists() && tmp.length() > 0) {
+                    val maximum = if (CacheCleaner.limitBytes > 0) {
+                        minOf(CacheCleaner.limitBytes, 64L * 1024 * 1024)
+                    } else {
+                        64L * 1024 * 1024
+                    }.toInt()
+                    val (buffer, used) = readBoundedBytes(input, maximum)
+                    val tmp = if (used <= maximum) {
+                        CacheCleaner.writeSubtitle(activity, buffer.copyOf(used), ".$ext")
+                    } else null
+                    if (tmp != null && tmp.exists() && tmp.length() > 0) {
                         outUri = android.net.Uri.fromFile(tmp).toString()
                         android.util.Log.d("FileBrowser", "subtitle copied to cache: $outUri (${tmp.length()} bytes)")
                     }

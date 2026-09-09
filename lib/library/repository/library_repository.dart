@@ -146,10 +146,28 @@ class JsonLibraryRepository implements LibraryRepository {
     }
     for (final discovered in batch.files) {
       final previous = files[discovered.id];
-      final keepPreviousMatch =
+      final isMetadataResult =
+          discovered.identificationState != MetadataState.unresolved;
+      if (previous != null &&
+          isMetadataResult &&
+          previous.matchRevision != discovered.matchRevision) {
+        // A manual correction or newer identification won the race while this
+        // request was in flight. Never let its stale result replace it.
+        continue;
+      }
+      final keepPreviousState =
           previous != null &&
           discovered.titleId == null &&
           discovered.identificationState == MetadataState.unresolved;
+      final keepPreviousBinding =
+          previous?.titleId != null &&
+          discovered.titleId == null &&
+          const {
+            MetadataState.unresolved,
+            MetadataState.noApiKey,
+            MetadataState.offline,
+            MetadataState.failed,
+          }.contains(discovered.identificationState);
       final roots = <String>{
         ...?previous?.rootIds,
         ...discovered.rootIds,
@@ -157,17 +175,20 @@ class JsonLibraryRepository implements LibraryRepository {
       };
       files[discovered.id] = discovered.copyWith(
         rootIds: roots,
-        titleId: keepPreviousMatch ? previous.titleId : discovered.titleId,
-        episodeId: keepPreviousMatch
-            ? previous.episodeId
+        titleId: keepPreviousBinding ? previous!.titleId : discovered.titleId,
+        episodeId: keepPreviousBinding
+            ? previous!.episodeId
             : discovered.episodeId,
-        matchOrigin: keepPreviousMatch
-            ? previous.matchOrigin
+        matchOrigin: keepPreviousBinding
+            ? previous!.matchOrigin
             : discovered.matchOrigin,
-        identificationState: keepPreviousMatch
+        identificationState: keepPreviousState
             ? previous.identificationState
             : discovered.identificationState,
         availability: MediaAvailability.available,
+        matchRevision: keepPreviousBinding
+            ? previous!.matchRevision
+            : discovered.matchRevision,
       );
     }
 
@@ -207,8 +228,16 @@ class JsonLibraryRepository implements LibraryRepository {
       final nextOverrides = Map<String, LibraryOverride>.of(current.overrides);
       final files = Map<String, MediaFile>.of(current.files);
       for (final override in overrides) {
-        nextOverrides[override.fileId] = override;
         final file = files[override.fileId];
+        final nextRevision = (file?.matchRevision ?? 0) + 1;
+        final versionedOverride = LibraryOverride(
+          fileId: override.fileId,
+          pinnedTitleId: override.pinnedTitleId,
+          seasonNumber: override.seasonNumber,
+          episodeNumber: override.episodeNumber,
+          revision: nextRevision,
+        );
+        nextOverrides[override.fileId] = versionedOverride;
         if (file == null) continue;
         final episodeId = override.episodeNumber == null
             ? null
@@ -218,6 +247,7 @@ class JsonLibraryRepository implements LibraryRepository {
           titleId: override.pinnedTitleId,
           episodeId: episodeId,
           matchOrigin: MatchOrigin.manual,
+          matchRevision: nextRevision,
         );
       }
       _snapshot = LibrarySnapshot(

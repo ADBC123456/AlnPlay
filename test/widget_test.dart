@@ -8,6 +8,7 @@ import 'package:dream_player/models/video_item.dart';
 import 'package:dream_player/screens/file_browser_screen.dart';
 import 'package:dream_player/screens/player_screen.dart';
 import 'package:dream_player/widgets/format_chip.dart';
+import 'package:dream_player/services/cache_quota_manager.dart';
 
 void main() {
   testWidgets('resource library shows saved WebDAV servers as shortcuts', (
@@ -166,6 +167,13 @@ void main() {
   });
 
   testWidgets('Clear cache shows a confirmation and confirms', (tester) async {
+    // Construct inside the widget test's fake-async zone so its serialized
+    // cache futures are scheduled by the same clock as the UI.
+    CacheQuotaManager.instanceForTesting = CacheQuotaManager(roots: []);
+    addTearDown(() {
+      CacheQuotaManager.instanceForTesting?.dispose();
+      CacheQuotaManager.instanceForTesting = null;
+    });
     // The dreamplayer/cache channel is only registered natively; in the test
     // binding an unhandled channel never completes, so mock it to return 0.
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -262,7 +270,8 @@ void main() {
 
     await tester.tap(find.text('资源库'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byType(FloatingActionButton));
+    expect(find.byType(FloatingActionButton), findsNothing);
+    await tester.tap(find.byIcon(Icons.add_rounded));
     await tester.pumpAndSettle();
 
     expect(find.text('WebDAV'), findsOneWidget);

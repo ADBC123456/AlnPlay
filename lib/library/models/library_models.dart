@@ -196,6 +196,8 @@ class MediaFile {
     this.identificationState = MetadataState.unresolved,
     this.availability = MediaAvailability.unknown,
     required this.legacyResumeKey,
+    this.matchRevision = 0,
+    this.isStrm = false,
   });
 
   final String id;
@@ -211,6 +213,8 @@ class MediaFile {
   final MetadataState identificationState;
   final MediaAvailability availability;
   final String legacyResumeKey;
+  final int matchRevision;
+  final bool isStrm;
 
   static const Object _unset = Object();
 
@@ -221,6 +225,7 @@ class MediaFile {
     MatchOrigin? matchOrigin,
     MetadataState? identificationState,
     MediaAvailability? availability,
+    int? matchRevision,
   }) => MediaFile(
     id: id,
     rootIds: rootIds ?? this.rootIds,
@@ -237,6 +242,8 @@ class MediaFile {
     identificationState: identificationState ?? this.identificationState,
     availability: availability ?? this.availability,
     legacyResumeKey: legacyResumeKey,
+    matchRevision: matchRevision ?? this.matchRevision,
+    isStrm: isStrm,
   );
 
   Map<String, dynamic> toJson() => {
@@ -254,6 +261,8 @@ class MediaFile {
     'identificationState': identificationState.name,
     'availability': availability.name,
     'legacyResumeKey': legacyResumeKey,
+    'matchRevision': matchRevision,
+    if (isStrm) 'isStrm': true,
   };
 
   factory MediaFile.fromJson(Map<String, dynamic> json) => MediaFile(
@@ -286,6 +295,8 @@ class MediaFile {
       MediaAvailability.unknown,
     ),
     legacyResumeKey: json['legacyResumeKey'] as String? ?? '',
+    matchRevision: (json['matchRevision'] as num?)?.toInt() ?? 0,
+    isStrm: json['isStrm'] == true,
   );
 }
 
@@ -295,18 +306,21 @@ class LibraryOverride {
     required this.pinnedTitleId,
     this.seasonNumber,
     this.episodeNumber,
+    this.revision = 0,
   });
 
   final String fileId;
   final String pinnedTitleId;
   final int? seasonNumber;
   final int? episodeNumber;
+  final int revision;
 
   Map<String, dynamic> toJson() => {
     'fileId': fileId,
     'pinnedTitleId': pinnedTitleId,
     if (seasonNumber != null) 'seasonNumber': seasonNumber,
     if (episodeNumber != null) 'episodeNumber': episodeNumber,
+    'revision': revision,
   };
 
   factory LibraryOverride.fromJson(Map<String, dynamic> json) =>
@@ -315,6 +329,7 @@ class LibraryOverride {
         pinnedTitleId: json['pinnedTitleId'] as String? ?? '',
         seasonNumber: (json['seasonNumber'] as num?)?.toInt(),
         episodeNumber: (json['episodeNumber'] as num?)?.toInt(),
+        revision: (json['revision'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -340,12 +355,21 @@ class LibraryRoot {
     required this.sourceId,
     required this.directory,
     required this.displayName,
-  });
+    this.maxScanDepth = defaultMaxScanDepth,
+  }) : assert(
+         maxScanDepth >= minimumMaxScanDepth &&
+             maxScanDepth <= maximumMaxScanDepth,
+       );
+
+  static const int defaultMaxScanDepth = 6;
+  static const int minimumMaxScanDepth = 1;
+  static const int maximumMaxScanDepth = 20;
 
   final String id;
   final String sourceId;
   final SourceDirectory directory;
   final String displayName;
+  final int maxScanDepth;
 }
 
 class SourceDirectory {
@@ -381,6 +405,7 @@ class SourceEntry {
     this.seasonNumber,
     this.episodeNumber,
     this.legacyResumeKey,
+    this.isStrm = false,
   });
 
   final String name;
@@ -394,6 +419,7 @@ class SourceEntry {
   final int? seasonNumber;
   final int? episodeNumber;
   final String? legacyResumeKey;
+  final bool isStrm;
 }
 
 class ListingPage {
@@ -409,6 +435,10 @@ abstract interface class LibrarySourceAdapter {
   Future<ListingPage> list(SourceDirectory directory, {String? cursor});
 
   Future<VideoItem> resolvePlayable(MediaFile file);
+}
+
+abstract interface class SmallTextLibrarySourceAdapter {
+  Future<String?> readSmallText(MediaFile file, {int maxBytes = 65536});
 }
 
 class DiscoveryContext {

@@ -25,6 +25,11 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
   @override
   Future<MatchResult> resolve(MediaFile file, DiscoveryContext context) async {
     final snapshot = await repository.snapshot();
+    final currentFile = snapshot.files[file.id];
+    if (currentFile != null &&
+        currentFile.matchRevision != file.matchRevision) {
+      file = file.copyWith(matchRevision: currentFile.matchRevision);
+    }
     final override = snapshot.overrides[file.id];
     if (override != null) {
       final episodeId = override.episodeNumber == null
@@ -52,7 +57,7 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
     final folderMeta = rootId == null
         ? null
         : TmdService.instance.metaFor('folder:$rootId');
-    if (folderMeta != null) {
+    if (folderMeta != null && _inheritsRootBinding(context.directoryNames)) {
       return _resolveFromFolderMatch(file, context, folderMeta);
     }
 
@@ -62,14 +67,17 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
         file: file.copyWith(identificationState: MetadataState.noApiKey),
       );
     }
-    final parent = context.directoryNames.reversed
-        .where((name) => name.trim().isNotEmpty)
-        .firstOrNull;
-    final parsed = ParsedFileName.parse(
+    final parsed = ParsedFileName.parseWithAncestors(
       file.originalFileName,
-      parentFolderName: parent,
+      context.directoryNames,
     );
     if (parsed.title.trim().isEmpty) {
+      return MatchResult(
+        file: file.copyWith(identificationState: MetadataState.needsReview),
+      );
+    }
+    if (parsed.isEpisode &&
+        (!(parsed.seriesName?.isNotEmpty ?? false) || !parsed.seasonKnown)) {
       return MatchResult(
         file: file.copyWith(identificationState: MetadataState.needsReview),
       );
@@ -189,12 +197,9 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
     TmdMeta meta,
   ) async {
     final movie = meta.movie;
-    final parent = context.directoryNames.reversed
-        .where((name) => name.trim().isNotEmpty)
-        .firstOrNull;
-    final parsed = ParsedFileName.parse(
+    final parsed = ParsedFileName.parseWithAncestors(
       file.originalFileName,
-      parentFolderName: parent,
+      context.directoryNames,
     );
     TmdDetails? details = meta.details;
     if (details == null) {
@@ -234,7 +239,10 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
 
     LibraryEpisode? episode;
     String? episodeId;
-    if (movie.kind == TmdKind.tv && parsed.isEpisode && parsed.episode > 0) {
+    if (movie.kind == TmdKind.tv &&
+        parsed.isEpisode &&
+        parsed.seasonKnown &&
+        parsed.episode > 0) {
       episodeId = '$titleId:s${parsed.season}:e${parsed.episode}';
       TmdEpisode? official = meta.seasons[parsed.season]?.episode(
         parsed.episode,
@@ -362,4 +370,15 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
 
   static String? _imageUrl(String? path, {int width = 342}) =>
       path == null ? null : 'https://image.tmdb.org/t/p/w$width$path';
+
+  static bool _inheritsRootBinding(List<String> ancestors) =>
+      ancestors.isNotEmpty &&
+      !ParsedFileName.isContainerDirectory(ancestors.first) &&
+      ancestors
+          .skip(1)
+          .every(
+            (name) =>
+                ParsedFileName.isSeasonDirectory(name) ||
+                ParsedFileName.isContainerDirectory(name),
+          );
 }

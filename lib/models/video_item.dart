@@ -184,6 +184,7 @@ class VideoItem {
     this.episodeNumber,
     this.seriesName,
     this.metadataContext,
+    this.uriIsTransient = false,
   });
 
   final String id;
@@ -245,6 +246,11 @@ class VideoItem {
   final String? seriesName;
 
   final VideoMetadataContext? metadataContext;
+
+  /// True when [uri] was resolved just for this playback session (for example
+  /// from a STRM file). Such URLs may contain expiring signatures and are
+  /// deliberately excluded from persisted history.
+  final bool uriIsTransient;
 
   final Duration duration;
   final int? sizeBytes;
@@ -325,6 +331,7 @@ class VideoItem {
       episodeNumber: episodeNumber,
       seriesName: seriesName,
       metadataContext: metadataContext,
+      uriIsTransient: uriIsTransient,
     );
   }
 
@@ -360,6 +367,7 @@ class VideoItem {
       episodeNumber: episodeNumber,
       seriesName: seriesName,
       metadataContext: metadataContext,
+      uriIsTransient: uriIsTransient,
     );
   }
 
@@ -398,6 +406,7 @@ class VideoItem {
       episodeNumber: episodeNumber,
       seriesName: seriesName,
       metadataContext: metadataContext,
+      uriIsTransient: uriIsTransient,
     );
   }
 
@@ -429,6 +438,7 @@ class VideoItem {
     episodeNumber: episodeNumber,
     seriesName: seriesName,
     metadataContext: context,
+    uriIsTransient: uriIsTransient,
   );
 
   String? get videoCodecLabel {
@@ -464,7 +474,7 @@ class VideoItem {
     'id': id,
     'title': title,
     'path': path,
-    'uri': uri,
+    'uri': uriIsTransient ? null : uri,
     'resumeKey': resumeKey,
     'durationMs': duration.inMilliseconds,
     'sizeBytes': sizeBytes,
@@ -482,6 +492,7 @@ class VideoItem {
     if (episodeNumber != null) 'episodeNumber': episodeNumber,
     if (seriesName != null) 'seriesName': seriesName,
     if (metadataContext != null) 'metadataContext': metadataContext!.toJson(),
+    if (uriIsTransient) 'uriIsTransient': true,
     if (videoCodec != null) 'videoCodec': videoCodec,
     if (audioCodec != null) 'audioCodec': audioCodec,
     if (audioChannels != null) 'audioChannels': audioChannels,
@@ -528,6 +539,7 @@ class VideoItem {
               (json['metadataContext'] as Map).cast<String, dynamic>(),
             )
           : null,
+      uriIsTransient: json['uriIsTransient'] == true,
       videoCodec: json['videoCodec'] as String?,
       audioCodec: json['audioCodec'] as String?,
       audioChannels: json['audioChannels'] as String?,

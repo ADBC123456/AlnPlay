@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
 import '../danmaku/scraper/scrape_state.dart';
+import '../library/source/strm_file.dart';
 import '../services/file_browser.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
@@ -10,7 +11,6 @@ import '../services/smb_client.dart';
 import '../services/tmdb_client.dart';
 import '../services/watched_store.dart';
 import '../services/webdav_client.dart';
-import '../utils/file_info_extractor.dart';
 import '../utils/season_group.dart' as sg;
 import '../widgets/season_progress_ring.dart';
 import '../widgets/tv_overscan.dart';
@@ -248,11 +248,27 @@ class _FolderScreenState extends State<FolderScreen> {
       await _load();
       return;
     }
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => TmdDetailsScreen(video: _toVideoItem(entry)),
-      ),
-    );
+    try {
+      final video = await entry.resolvePlayable(
+        id: 'folder_${widget.folder.id}_${entry.playbackIdentity.hashCode}',
+      );
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => TmdDetailsScreen(video: video)),
+      );
+    } on StrmFormatException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      return;
+    } on PlatformException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This STRM file could not be read')),
+      );
+      return;
+    }
     // Resume positions may have changed while playing.
     await _load();
   }
@@ -288,6 +304,16 @@ class _FolderScreenState extends State<FolderScreen> {
       await _loadSmb();
       return;
     }
+    if (isStrmFileName(entry.name)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'STRM files are not supported from this network source',
+          ),
+        ),
+      );
+      return;
+    }
     final serverId = widget.folder.networkServerId ?? '';
     final share = widget.folder.networkShare ?? _networkShare;
     final uri = await SmbClient.instance.openShare(serverId, share, entry.path);
@@ -308,23 +334,8 @@ class _FolderScreenState extends State<FolderScreen> {
   }
 
   VideoItem _toVideoItem(FileEntry entry) {
-    // Bookmarked-tree videos come back as content:// URIs (no real file
-    // path), so hand those to the player's `uri` field.
-    final isContentUri = entry.path.startsWith('content://');
-    final info = extractFileInfo(entry.name);
-    return VideoItem(
-      id: 'folder_${widget.folder.id}_${entry.path.hashCode}',
-      title: entry.name,
-      path: isContentUri ? null : entry.path,
-      uri: isContentUri ? entry.path : null,
-      resumeKey: entry.resumeKey,
-      duration: Duration.zero,
-      sizeBytes: entry.size,
-      videoCodec: info.videoCodec,
-      audioCodec: info.audioCodec,
-      audioChannels: info.audioChannels,
-      resolution: info.resolution,
-      hdrHint: info.hdrHint,
+    return entry.toVideoItem(
+      id: 'folder_${widget.folder.id}_${entry.playbackIdentity.hashCode}',
     );
   }
 

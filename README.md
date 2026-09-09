@@ -1,295 +1,166 @@
 # AlnPlay
 
 <p align="center">
-  <img src="assets/alnplay_app_icon.png" width="200" alt="AlnPlay icon">
+  <img src="assets/alnplay_app_icon.png" width="180" alt="AlnPlay logo">
 </p>
 
-[![License: GPLv3](https://img.shields.io/github/license/ADBC123456/AlnPlay?style=flat)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad%20%7C%20Android%20TV-blue)](https://github.com/ADBC123456/AlnPlay)
-[![Flutter](https://img.shields.io/badge/Flutter-3.44-46A6F2?logo=flutter&logoColor=white&color=46A6F2)](https://flutter.dev)
-[![iOS build](https://img.shields.io/github/actions/workflow/status/ADBC123456/AlnPlay/ios.yml?label=iOS%20build)](https://github.com/ADBC123456/AlnPlay/actions/workflows/ios.yml)
-![Vibe Coded](https://img.shields.io/badge/vibe--coded-100%25-8A2BE2)
+<p align="center">面向本地文件与家庭媒体库的跨平台视频播放器。</p>
 
-A cross-platform video player for **Android, iOS/iPad, and Android TV** — built for true Dolby Vision, HDR10/HDR10+, and lossless audio playback.
+[![License: GPLv3](https://img.shields.io/github/license/ADBC123456/AlnPlay?style=flat)](LICENSE) [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20iPad-blue)](https://github.com/ADBC123456/AlnPlay) [![Flutter](https://img.shields.io/badge/Flutter-3.44-46A6F2?logo=flutter&logoColor=white)](https://flutter.dev)
 
-> **This project is 100% vibe coded** — designed, directed, and tested by a human;
-> written end-to-end in collaboration with AI coding agents, one feature at a time.
-> Every feature ships only after real on-device verification.
+AlnPlay 使用 Flutter 构建，保留 Android 原生 Media3 播放路径与 iOS 原生播放路径。它适合整理本地视频、NAS/WebDAV 内容和家庭媒体库；具体格式、HDR 与音频能力取决于平台、设备硬件和文件封装。
 
-## Highlights
+## 当前版本
 
-### Dolby Vision & HDR
-- Plays **Dolby Vision** Profiles **P4 / P5 / P7 / P8 / P9** at 4K 60fps with zero dropped frames — chip shows `DV P8`, `DV P7`, etc.
-- Full **HDR10 / HDR10+ / HLG** passthrough to the display panel
-- Live on-screen chips showing the active HDR format (profile-aware), video codec, audio codec, and resolution
-- Graceful fallback on non-DV devices (P7/P8 as HDR10, P5 shows clean error)
+- 代码中的应用版本：`1.1.0+3`（见 `pubspec.yaml`）。
+- 可安装构建与发布说明请以 [GitHub Releases](https://github.com/ADBC123456/AlnPlay/releases) 为准；代码版本号不等同于已发布版本。
 
-### Lossless Audio
-- All major codecs: **DTS, DTS-HD, TrueHD, E-AC3, AC3, AAC, FLAC** and more
-- Mid-playback **audio track switching** with full track names and channel info
-- Optional **audio passthrough** over HDMI for Dolby Atmos / DTS:X on compatible soundbars
-- **Spatial audio** (Android 13+) — teal chip shows when the system Spatializer virtualizes multichannel surround for your headphones/speakers; works with wired, USB, and Bluetooth output
-- **Bass Boost** — Off/Low/Medium/High session-level DSP that restores the low-end HRTF virtualization thins out (appears while Spatial audio is engaged)
-- **Volume Boost + Night Mode** — up to 3× loudness lift and dynamic-range compression (Android)
+## 主要功能
 
-### Subtitles
-- **Embedded + sideloaded** — every subtitle file next to the video auto-attaches
-- **Network-share sidecars** — `.srt`/`.ass`/`.vtt`/`.sub`/`.ttml`/`.smi`/`.mpl2` files
-  in the same SMB / WebDAV / FTP folder as the video are auto-discovered and
-  attached as external tracks. The best filename match is auto-selected
-  (`Show.S01E01.eng.srt` matches `Show.S01E01.mkv`). Works on Android for
-  every network source — local files, SMB shares, WebDAV servers, FTP/SFTP
-  servers, Jellyfin libraries, and "Open with" hand-offs. iOS supports the
-  same behaviour for local files (via `AetherPlayerView`); server-side
-  external sub discovery for WebDAV/FTP on iOS is on the roadmap.
-- **Priority: sidecar > server external > embedded.** The first sidecar
-  match is flagged as the default track; the rest are reachable from the
-  CC button. When a folder has zero matches, the player falls back to the
-  container's embedded track automatically.
-- **Fallback-engine subs** — the libmpv fallback engine has the same priority
-  rule. External subs are added with `sub-add` (non-defaults) and
-  `setSubtitleTrack` (default), so mpv's track-list mirrors the Media3 path
-  and the CC sheet shows every track by real filename.
-- Supports SRT, SSA/ASS, WebVTT, TTML, SAMI, MicroDVD, MPL2, SubViewer
-- Full track picker with Off option; subtitles are anchored to the video, not the screen
-- **Appearance settings** — size, color, background, outline, and sync delay with live preview (in the player's ⋮ menu; delay live on Android via `DelayingParser` + reopen)
-- **OpenSubtitles** — search/download from CC (5/day anon, 20/day free login); Nova-based language catalog (full names, 3-letter `eng/fre/pob/zho`, `zh-CN/zh-TW`) for reading + download prefs + text encoding (CP1250…CP949)
+### 播放
 
-### Network Playback
-- **SMB / NAS** — in-app SMB browser on Android; CX Explorer "Open with" handoff
-- **WebDAV** — browse and stream from WebDAV servers on both platforms
-- **Jellyfin / Emby** — browse libraries, direct-play with auto-discovery
-- **FTP / SFTP** — browse and stream from FTP servers and SSH/SFTP file hosts
-- **DLNA / UPnP** — discover and play from media servers on your LAN
-- **Files app "Open with"** on iPad with bookmarked folders
-- Encrypted credentials (Android Keystore / iOS Keychain)
+- Android 使用 Media3/ExoPlayer 与原生 SurfaceView；适合 HDR/Dolby Vision 直通的设备路径。
+- iPhone/iPad 使用 AetherEngine 与 AVPlayer 组合，支持常见 Apple 容器及 FFmpeg 覆盖的其他容器。
+- 覆盖 MKV、MP4、MOV、TS、AVI、WebM 等常见容器；设备不支持的编码会正常报告失败。
+- Android 音频路径包含 FFmpeg 扩展，可处理 DTS、DTS-HD、TrueHD、E-AC3、AC3、FLAC、AAC 等常见格式；是否能 bitstream/passthrough 由输出设备决定。
+- Android 提供两种可选引擎：默认使用 Media3，也可主动选择“使用 MPV 播放”。MPV 为 SDR 播放路径，不自动切换，不能输出真正的 HDR/DV；iOS 不使用 MPV。
+- 播放控制包括暂停、拖动、倍速、画面比例、章节、手势、触控锁、画中画和播放进度恢复。
+- 支持选择音轨与字幕轨，支持结束后重播以及同目录下一集播放（按来源能力）。
 
-### Smart Library
-- **Continue watching** — resume any partially-watched video with progress bars
-- **User-added folders** — add a TV show or movie folder, get a TMDB poster and episode list
-- **Bookmark any network folder to Home** — pin SMB, WebDAV, FTP, or DLNA folders straight from their browsers, with a colored source badge
-- **Jellyfin folders in the home library** — server shows sit alongside local folders
-- **SIMKL watched sync** — free unlimited watch-history sync (`simkl.com`); auto-pushes finished videos and syncs watched state across devices
-- **File browser** — browse device storage and play any video without importing
+### 媒体库
 
-### Movie Metadata (TMDB)
-- Every video opens a **details screen** with poster, backdrop, synopsis, rating, genres, runtime, and cast
-- Metadata auto-fetches in the background — rows show poster thumbnails before you tap
-- TV episodes labeled with Season/Episode info
-- "Fix match" to correct a wrong auto-match
+- 可添加本地文件夹、WebDAV、Jellyfin/Emby、FTP/SFTP、UPnP/DLNA 等来源；应用内 SMB/NAS 浏览限 Android。
+- Android 支持应用内 SMB 浏览；iPad 的 SMB 内容可通过“文件”应用打开，应用内 WebDAV 与其他受支持来源仍可使用。
+- 扫描深度可按媒体库设置，范围为 1–20 层，默认 6 层。
+- 文件名与祖先目录都可参与影视识别；识别结果保存为本地媒体库索引。
+- 影视详情页使用 TMDB 元数据，包括海报、背景、简介、评分、演员及剧集季集信息；需要可用的 TMDB API key，可在设置中填写。
+- 继续观看、观看标记、播放进度和媒体来源稳定身份保存在本地。
+- 可选连接 SIMKL 同步观看记录；未配置时不启用该同步。
+- `.strm` 支持本地文件与 WebDAV 源：应用仅读取不超过 64 KiB 的文本并解析 HTTP(S) 地址，不提供云盘直连或云盘授权代理。
+- WebDAV/SMB/FTP 目录中的可播放文件与相邻字幕可按来源能力浏览和播放；凭据保留在平台原生安全存储中。
 
-### Player Controls
-- Play/pause, seek, ±10s, fullscreen, auto-hiding UI
-- **Swipe gestures** — swipe left side for brightness, right side for system volume (phones/tablets, togglable in Settings)
-- Aspect ratio picker: Fit, Crop, Stretch, 16:9, 4:3 (persists per video)
-- **Chapters** — MKV chapter ticks in the overflow menu, current chapter highlighted, tap to seek
-- **Playback speed** 0.25×–2× with refresh-rate matching on Android
-- **Pinch-to-zoom**, horizontal-swipe seek, double-tap-to-seek ±10 s
-- **Touch lock** — locks gestures during playback; tap once to reveal the unlock button
-- **Watched marks** — videos auto-mark as watched at the end; toggle manually per row
-- **Auto-play next episode** within the same folder — local/SMB + **Jellyfin via ParentId sibling walk** (togglable)
-- Resumes playback from where you left off, even after app close or screen lock
-- **Picture-in-Picture** — system-drawn transport controls (rewind, play-pause, forward) work for BOTH engines, including the libmpv engine (where the video is a Flutter texture that receives no touches in pip)
-- **Two play engines — your choice** — every video's details screen shows **Play** (Media3) and **Play with MPV** (libmpv, Android). mpv runs hardware-first (`hwdec=auto-safe`) with its own FFmpeg software fallback, plus Dolby Atmos / DTS-HD / TrueHD audio passthrough. SDR-only by design (Flutter textures have no HDR path) — Media3 keeps the DV/HDR goal.
+### 字幕与弹幕
 
-### Second engine (Android): libmpv
+- 自动发现视频同目录的外置字幕，并与内嵌字幕一起在 CC 面板中选择。
+- 支持 SRT、SSA/ASS、WebVTT、TTML、SAMI、MicroDVD、MPL2、SubViewer 等格式（具体渲染能力随平台而异）。
+- 字幕提供大小、颜色、背景、描边、位置和同步延迟等设置；字幕会按视频显示区域定位。
+- 可选 OpenSubtitles 搜索与下载，使用服务方账户/配额与 API key 规则。
+- 弹幕采用可配置来源、匹配、缓存和时间轴渲染流程；支持单集匹配、整季处理及播放中的显示开关。弹幕源与可用内容取决于用户配置和服务端响应。
 
-The TMDb details screen offers **Play with MPV** alongside the primary Play
-(Music to Media3). The libmpv engine (`media_kit` + bundled libmpv) starts
-up front — no Media3 platform view — runs **hardware-first**
-(`hwdec=auto-safe` over MediaCodec) and falls back to its bundled FFmpeg
-software decode when the hardware can't handle a stream, so anything the
-native engine's hardware/software path can't open (12-bit HEVC 4:4:4, a
-corrupt container, an unknown codec) plays through FFmpeg. It drives the same
-transport, seekbar, gestures, PiP, resume, chapter list, and CC sheet as
-Media3, and its `_configureMpvAudio` hands the OS compressed passthrough
-(`audio-spdif=ac3,eac3,dts,dts-hd,truehd`; AudioTrack output) for Dolby Atmos
-/ DTS-HD / DTS / AC3 / TrueHD — PCM-decoding automatically when the output
-can't take a bitstream. Sidecar subtitles are added explicitly
-(external > embedded priority, same rule as the main path).
+### 界面与系统集成
 
-On a terminal Media3 error, the error surface offers **Try with MPV** instead
-of a dead end. Media3 never auto-switches — the engine choice is always the
-user's (up front, or on the error surface).
+- 手机、平板、横屏与大字体布局适配；iPad 详情页支持全宽布局。
+- 首页使用可拖动的液态玻璃风格 Dock；视觉效果会随平台渲染能力变化。
+- 支持 Android TV/遥控器方向键的基础导航（以构建目标和设备为准）。
+- 支持 iOS/iPadOS“文件”应用导入、Open with，以及 Android 外部 Intent 打开视频。
+- 提供本地缓存上限：`1 GiB`、`2 GiB`、`5 GiB`、`10 GiB`、`50 GiB` 与“不限制”；默认 `5 GiB`。缓存清理不删除媒体库和观看记录。
+- 缓存按最近使用时间淘汰，播放中的临时字幕会保留到播放器释放；上限不包含用户视频、STRM 原文件、持久字幕下载、应用本体或内存占用。界面中的 GB 按 1024³ 字节计算。
+- 设置页可手动检查 GitHub 更新；默认启动后每日检查一次。更新检查固定读取公开仓库 `ADBC123456/AlnPlay` 的 latest release，不需要 GitHub token。
+- 发现更新后显示版本、发布日期与更新说明，跳转发布页面下载；不在应用内自动安装，iOS 仍需侧载工具。
 
-It **cannot** do DV/HDR by design: a Flutter texture has no HDR path on any
-platform, so the Media3 engine keeps the project goal. iOS does not run mpv;
-AetherEngine covers its own failures.
+## 文件夹与 STRM 使用
 
-For SMB sources the mpv engine gets the file over a tiny loopback HTTP/1.1
-server (`SmbHttpProxy.kt`, bound to `127.0.0.1`, byte-range aware) — jcifs-ng
-only talks to Media3-native `DataSource`s, and libmpv can't read `smb://`.
+命名优先使用明确的季集编号，也支持由目录补充剧名和季数：
 
-### Android TV / Fire TV
-- Full 10-foot UI with D-pad navigation and custom focus highlights
-- Leanback launcher banner
-- Dolby Vision + HDR10 passthrough to the TV panel
-- Audio passthrough for Atmos/DTS:X over HDMI
-- Tested on Amazon Fire TV Stick 4K (Fire OS 7.1)
+```text
+媒体库/
+└── 凡人修仙传/
+    └── 第二季/
+        └── 高清/
+            ├── 01.mkv
+            └── 02.strm
+```
 
-## Engines Used
+在这个结构中，`01.mkv` 可结合祖先目录识别为第二季第一集。`凡人修仙传.S02E01.mkv` 这样的显式文件名优先级更高；人工修正和服务器已提供的匹配会被保留。无法确认的季集不强行归入特别篇。
 
-AlnPlay is a video player app, but the actual video *engine* depends on
-your platform. Different platforms need different engines to do what we
-promise: **Dolby Vision + HDR10 passthrough to the panel, lossless audio
-decoding, and a stable 4K 60 fps picture on a phone.**
+根目录按第 0 层计算，默认最多深入 6 层；达到上限的目录内文件仍会读取，但不再进入更深目录。来源长按可调整扫描层级。扫描中断、超时或部分目录不可读时，不把旧索引中的文件直接当作已删除。
 
-| Engine | Platform | What it does | Why we picked it |
-|---|---|---|---|
-| **Media3 / ExoPlayer 1.10.x** | Android phone, tablet, Android TV, Fire TV | The Google-maintained Android playback engine. We use it through a **hybrid-composition `PlatformViewLink`** so the `SurfaceView` is a real SurfaceFlinger layer on the physical display. This is the only path that delivers real HDR/DV to the panel. Built on top of Media3 is our `DreamRenderersFactory` which adds the **nextlib FFmpeg audio extension** for DTS / DTS-HD / E-AC3-JOC / TrueHD / FLAC. | The only engine that does hardware Dolby Vision on Android (`c2.qti.dv.decoder` on the OnePlus, `OMX.MTK.VIDEO.DECODER.DVHE.STH` on the Fire TV) with real HDR composited on the panel. Nova Video Player, Just Player, Plex, MX Player Pro all use it. |
-| **AetherEngine 6.38.x** | iOS / iPad | Native iOS playback built on AVPlayer + FFmpeg demux/decode. The AetherPlayerView exposes a `videoFormat` for `.hdr10 / .hdr10Plus / .dolbyVision`, the engine reads the container, FFmpeg fills in what AVPlayer can't (DTS / DTS-HD / TrueHD, MKV / WebM / TS / AVI containers), and the engine routes bitstream-audio over HDMI. | The only path that combines AVPlayer's hardware HDR / DV fast path on the panel with FFmpeg's container / codec coverage for non-Apple formats. iOS has no ExoPlayer port. |
-| **nextlib `media3ext`** | Android (FFmpeg audio) | The Android FFmpeg extension that adds `FfmpegAudioRenderer` for DTS / DTS-HD / TrueHD / FLAC. Wired into `DreamRenderersFactory` AFTER the stock audio renderer, so it acts as a fallback for the lossless codecs. | The same FFmpeg integration Nova Video Player uses. Video stays on hardware `MediaCodecVideoRenderer`; audio falls back to FFmpeg for the formats the OS can't decode. |
-| **Citadel (SwiftNIO SSH)** | iOS / iPad SFTP | Native SFTP client used by the FTP browser for SFTP playback (`FtpByteRangeSource`). | The only maintained Swift SSH client that compiles cleanly on iOS 17. |
-| **jcifs-ng** | Android SMB | The Java SMB 2/3 client used by the in-app SMB browser + `SmbDataSource` (custom ExoPlayer `DataSource` that streams from the share). | Nova's and CX Explorer's SMB library; measured ~75 MB/s vs ~4–6 MB/s for smbj on the NAS. |
-| **Media3 / DefaultHttpDataSource + OkHttp** | Android HTTP(S) | Standard Media3 HTTP source (with a custom trust-all OkHttp client for self-signed WebDAV). | Reuses Media3's mature HTTP implementation; the self-signed client is opt-in per server. |
-| **WebDAVByteRangeSource** (in `AetherEngineSMB`) | iOS / iPad WebDAV | A `ByteRangeSource` that serves every engine read as an independent HTTP `Range` request with the `Authorization` header, on a permissive or default-trust session. Wrapped in `BufferedSMBReader` for read-ahead. | AetherEngine's own HTTP stack can't carry auth headers or bypass TLS validation; this is the cleanest bridge between the WebDAV client and the engine. |
-| **media_kit + libmpv** (hardware-first `hwdec=auto-safe`, FFmpeg software fallback) | Android, user-chosen | **Second engine**: `Play with MPV` on the details screen (or `Try with MPV` on the Media3 error surface) starts a bundled libmpv that runs hardware decoders by default and drops to its own FFmpeg software decode when the hardware can't handle a stream — so files the native engine's hardware/software path can't open (12-bit HEVC 4:4:4, corrupt containers, unknown codecs) play through FFmpeg. Renders into a Flutter `Texture` via media_kit's `VideoController` and drives the same player UI as the main engine. Configures AudioTrack + `audio-spdif` passthrough for Atmos / DTS-HD / DTS / AC3 / TrueHD (PCM fallback when the sink can't). Ships `libmpv.so` via `media_kit_libs_android_video` — Android-only, so iOS doesn't pull in `Mpv.framework` (which breaks SideStore's `ldid` signer). | The user gets a second full player for anything Media3 can't decode, without giving up hardware decode or multichannel audio. Cannot do DV/HDR (Flutter textures have no HDR path), so the Media3 engine keeps the project goal. iOS does not run mpv. |
-| **SmbHttpProxy** (in-app) | Android fallback over SMB | A tiny HTTP/1.1 server (ServerSocket accept loop, one daemon thread per connection, GET/HEAD + single `Range`) bound to `127.0.0.1` that hands out a jcifs-ng `SmbRandomAccessFile` per token. Idle handles are parked in an `ArrayDeque` per file. | jcifs-ng only talks to Media3-native `DataSource`s, and libmpv can't read `smb://` directly — the loopback bridge is the cleanest way to let the fallback engine stream SMB sources without re-plumbing the network stack. |
+外部工具生成的 `.strm` 应为 UTF-8 小文件，只包含一个可播放的 HTTP(S) 地址，例如：
 
-### Why is Media3 the primary engine — and how does mpv fit?
+```text
+https://media.example.com/videos/episode-02.mkv
+```
 
-We tried mpv earlier. It is not the right choice for the **primary** DV/HDR
-path on Android, and we deliberately do not pretend otherwise. The two
-blockers:
+支持 BOM、空行和注释；拒绝多目标、其他协议或嵌套 STRM。扫描阶段只读取不超过 64 KiB 的指针文本与目录信息，不读取其指向的视频流。播放时重新读取目标，观看进度绑定原 STRM，不在历史记录中保存临时签名地址。
 
-1. **Dolby Vision RPU parsing fails.** mpv v0.36 + FFmpeg 6.0 cannot read the
-   DOVI configuration record in DV P8 MKVs. Result: pink/green output. (mpv
-   PR #16818 was the upstream fix attempt; it never landed for our FFmpeg
-   version.)
-2. **No HDR to the panel.** `media_kit` renders into a Flutter texture.
-   Flutter textures have **no HDR path on any platform** (media-kit issue
-   #615). The decoded HDR10 buffer is tone-mapped to SDR before the panel
-   ever sees it — so even when mpv *decodes* HDR10 correctly, the user
-   sees washed-out colors.
+STRM 能减少扫描视频流的请求，但不能保证第三方网盘不会限流或风控。请使用有权访问的来源，并遵守服务方规则。
 
-So mpv is **not** the primary engine. The exit interview was: keep Media3 +
-native SurfaceView for the DV/HDR fast path; ship native FFmpeg audio for the
-lossless codecs; that's the same engine stack Nova Video Player uses
-(ExoPlayer + FFmpeg audio) and the same one Just Player uses (stock
-`DefaultRenderersFactory` + nextlib `media3ext`).
+## 不包含的功能
 
-**But** mpv *is* a great second engine, and the choice is yours:
+- 本项目当前不提供百度网盘、阿里云盘或夸克网盘的官方直连授权与播放时解析。
+- `.strm` 只支持 HTTP(S) target；不会请求嵌套 STRM，也不会把源 WebDAV 凭据发送给 target。
+- 不把“支持某格式”理解为所有设备都能硬解；HDR/DV、音频 passthrough、容器和字幕能力始终受设备与系统限制。
 
-- The main Media3 engine + hardware decoders remain the default play path.
-- **Play with MPV** (details screen) starts libmpv up front — hardware-first
-  (`hwdec=auto-safe`) with its own FFmpeg software fallback — for anything
-  you want routed through mpv's decoder coverage. The ⓘ info sheet shows
-  `Engine · libmpv` while it's active.
-- On a terminal Media3 error the error surface offers **Try with MPV** instead
-  of auto-switching — the engine choice is always explicit.
+## 截图
 
-Documented in `AGENTS.md → Player engine choice` and `Playback research notes`.
-
-### Why not libVLC / other FFmpeg wrappers?
-
-- **libVLC** — works for SD content, but VLC's Android player renders
-  into a `Surface` it doesn't own. To get real HDR passthrough you'd
-  need VLC's `mediacodec-hardware` decoder chain, which still doesn't
-  handle the DOVI RPU correctly on most devices. The VLC-for-Android
-  fork that *does* (libVLC ≥ 4.0 with the `dovi` plugin) is a 100 MB
-  binary, ships its own player UI, and is licensed LGPL-2.1 (the
-  App Store constraint would force us to relink it).
-- **"ffmpeg-kant" / other FFmpeg wrappers** — pure-software decode on a
-  phone. 4K HDR HEVC at 60 fps stutters on every Snapdragon 678 / 7
-  gen 1 / 8 gen 2 device we've tested. No native hardware path.
-
-## Spatial Audio on Android
-
-AlnPlay surfaces the **system Spatializer** (Android 13+,
-`AudioManager.getSpatializer()`) as a teal **"Spatial"** chip in the
-player top bar. When the chip is on, your phone is virtualizing the
-surround mix for your output device (stereo headphones, phone speaker,
-or a USB DAC). The Spatializer is implemented by the OEM, so the
-quality / available modes vary by device. The chip turns on only when
-the system reports:
-
-1. The Spatializer is available on this device.
-2. The current routing (headphones, USB, etc.) supports spatialization.
-3. The currently-playing audio track is multichannel (≥ 6 channels for
-   surround, ≥ 8 for Atmos).
-
-To enable spatial audio in AlnPlay:
-
-1. **Connect headphones or a USB DAC.** Phone speakers don't get
-   spatialized on most devices.
-2. **Open the file you want to play.** A multichannel track is required
-   — a stereo `.aac` won't engage the Spatializer.
-3. **Enable system spatial audio:**
-   - **OnePlus / OPPO** — Settings → Sound & vibration → Spatial Audio
-     → enable, then choose "Music & Video". On ColorOS 13+ this is
-     under Settings → Sound & vibration → Dolby Atmos / OPlus Audio.
-   - **Samsung (One UI 6+)** — Settings → Sounds and vibration → Sound
-     quality and effects → Dolby Atmos for games / movies, **and**
-     "Adapt Sound" / "Dolby Atmos for headphones" if you're on the
-     built-in speakers. The Spatializer only reports available when
-     "Dolby Atmos" is on.
-   - **Xiaomi (MIUI 14+)** — Settings → Sound & vibration → Sound
-     effects → Immersive Sound / Dolby Atmos. On some MIUI builds the
-     option is under "Audio tuner" → "Apply sound effects to media".
-   - **Pixel (Android 14+)** — Settings → Sound & vibration → Spatial
-     audio. The Pixel implementation is limited; some Pixels only
-     spatialize on specific Bluetooth codecs (LDAC / aptX Adaptive).
-   - **Nothing OS / Motorola / ASUS ZenUI** — most ship with the
-     Spatializer disabled. Install **Dirac Audio** / **Dolby Access** /
-     your OEM's audio app and enable spatialization from there; the
-     system Spatializer reports available once the OEM app is active.
-4. **Look for the "Spatial" chip in the player top bar.** When the
-   Spatializer is on for the current track the chip turns teal. Tap
-   the **ⓘ** button next to the title — the "Spatial audio" row reads
-   "On" with the routing info.
-
-The chip is Android-only. iOS uses Apple's own spatial audio for Atmos
-content on the native AVPlayer path; the system toggles it from Control
-Center → AirPlay / Head-tracking, not from inside any third-party app.
-
-## Screenshots
+以下为仓库已有界面截图，可能与当前开发版本的 Dock 和布局不同。
 
 <p align="center">
-  <img src="screenshots/home.jpg" width="240" alt="Home screen">
-  &nbsp;&nbsp;
-  <img src="screenshots/movie_detail.jpg" width="240" alt="Movie details">
-  &nbsp;&nbsp;
-  <img src="screenshots/menu.jpg" width="240" alt="Add content menu">
-  &nbsp;&nbsp;
-  <img src="screenshots/settings.jpg" width="240" alt="Settings">
+  <img src="screenshots/home.jpg" width="220" alt="首页">
+  <img src="screenshots/movie_detail.jpg" width="220" alt="影视详情">
+  <img src="screenshots/menu.jpg" width="220" alt="添加内容菜单">
+  <img src="screenshots/settings.jpg" width="220" alt="设置">
 </p>
 
-## Requirements
+## 下载与安装
 
-| Platform | Minimum version |
-|---|---|
-| Android | 5.0 (API 21) |
-| iOS / iPadOS | 17.0 |
+请从 [Releases](https://github.com/ADBC123456/AlnPlay/releases) 下载构建产物。
 
-## Download
+- Android：APK 构建，安装前请确认 ABI 与设备兼容。
+- iOS/iPadOS：提供未签名 IPA；可使用 [SideStore](https://sidestore.io) 或 [AltStore](https://altstore.io) 进行侧载。签名有效期由侧载工具和账户类型决定。
 
-Prebuilt binaries are on the [Releases](https://github.com/ADBC123456/AlnPlay/releases) page.
+## 平台要求
 
-- **Android** — universal APK + per-architecture APKs (arm64, armv7, x86_64)
-- **iOS / iPadOS** — unsigned IPA; sideload with [SideStore](https://sidestore.io) or [AltStore](https://altstore.io)
+| 平台 | 项目配置 |
+| --- | --- |
+| Android | 当前 Flutter 3.44.7 构建最低 Android 7.0（API 24）；项目使用 `flutter.minSdkVersion` |
+| iOS / iPadOS | iOS 17.0 或更高 |
 
-### Installing on iPhone / iPad
+## 技术栈
 
-1. Install [SideStore](https://sidestore.io) or [AltStore](https://altstore.io) on your device
-2. Download `AlnPlay-*.ipa` from the [latest release](https://github.com/ADBC123456/AlnPlay/releases)
-3. Open SideStore/AltStore → **+** → select the IPA
-4. The 7-day signature auto-refreshes over Wi-Fi
+- Flutter 3.44.x：应用界面、媒体库、设置和跨平台业务逻辑。
+- Android Media3/ExoPlayer：原生视频 Surface、硬件解码、HDR/DV 路径及 FFmpeg 音频扩展。
+- iOS AetherEngine + AVPlayer：原生播放、FFmpeg 容器/音频覆盖和系统显示路径。
+- jcifs-ng：Android SMB 2/3；Citadel/SwiftNIO：iOS SFTP；WebDAV 使用平台原生网络层与 Range 读取。
+- TMDB：影视元数据；OpenSubtitles：可选字幕搜索/下载；弹幕服务由用户配置来源提供。
+- Flutter MethodChannel/PlatformView：连接原生播放、文件、网络来源与系统集成。
 
-## Getting Started
+## 数据与隐私边界
+
+- 媒体库索引、观看进度、设置和缓存默认保存在设备本地。
+- 浏览、媒体库刷新、刮削和播放会访问已配置的网络来源；账号密码由平台安全存储管理。
+- TMDB、OpenSubtitles、弹幕来源、已启用的 SIMKL 同步和 GitHub 更新检查会按对应功能访问第三方服务。
+- AlnPlay 不运营网盘内容，也不代替用户取得第三方媒体的访问授权。
+
+## 开发
+
+需要 Flutter stable 3.44.x、Android SDK，以及 iOS 构建所需的 Xcode（仅 macOS）。
 
 ```bash
 flutter pub get
-flutter run                    # run on a connected device
-flutter test                   # run tests
-flutter analyze                # static analysis
+flutter run
+flutter analyze
+flutter test
 ```
 
-For TMDB metadata, copy `.env.example` to `.env` and add your API key:
+TMDB key 可写入 `.env`（参考 `.env.example`）：
 
 ```bash
 flutter run --dart-define-from-file=.env
 ```
 
-## License
+Android 构建：
 
-Copyright (C) 2026 Mangesh Ghodke. Released under the [GNU General Public License v3.0](LICENSE).
+```bash
+flutter build apk
+```
+
+iOS 构建需在 macOS/Xcode 环境执行：
+
+```bash
+flutter build ios --no-codesign
+```
+
+## 许可
+
+本项目按 [GNU General Public License v3.0](LICENSE) 发布。第三方依赖仍受其各自许可证约束；归属与原项目版权声明见 [NOTICE](NOTICE)。

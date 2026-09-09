@@ -254,6 +254,75 @@ void main() {
       repository = JsonLibraryRepository(storageDirectory: directory);
     },
   );
+
+  test('manual override revision rejects stale metadata result', () async {
+    await repository.applyScanBatch(
+      const ScanBatch(rootId: 'root', generation: '1', isStart: true),
+    );
+    await repository.applyScanBatch(
+      ScanBatch(
+        rootId: 'root',
+        generation: '1',
+        files: [
+          _file(id: 'files:race', rootId: 'root', sourceId: 'files:device'),
+        ],
+      ),
+    );
+    await repository.applyOverrides(const [
+      LibraryOverride(fileId: 'files:race', pinnedTitleId: 'tmdb:tv:manual'),
+    ]);
+    final stale = _file(
+      id: 'files:race',
+      rootId: 'root',
+      sourceId: 'files:device',
+      titleId: 'tmdb:tv:stale',
+    ).copyWith(identificationState: MetadataState.matched);
+    await repository.applyScanBatch(
+      ScanBatch(rootId: 'root', generation: '1', files: [stale]),
+    );
+
+    final file = (await repository.snapshot()).files['files:race']!;
+    expect(file.titleId, 'tmdb:tv:manual');
+    expect(file.matchOrigin, MatchOrigin.manual);
+    expect(file.matchRevision, 1);
+  });
+
+  test('transient metadata failure preserves an existing binding', () async {
+    await repository.applyScanBatch(
+      const ScanBatch(rootId: 'root', generation: '1', isStart: true),
+    );
+    await repository.applyScanBatch(
+      ScanBatch(
+        rootId: 'root',
+        generation: '1',
+        files: [
+          _file(
+            id: 'files:known',
+            rootId: 'root',
+            sourceId: 'files:device',
+            titleId: 'tmdb:movie:1',
+          ).copyWith(identificationState: MetadataState.matched),
+        ],
+      ),
+    );
+    await repository.applyScanBatch(
+      ScanBatch(
+        rootId: 'root',
+        generation: '1',
+        files: [
+          _file(
+            id: 'files:known',
+            rootId: 'root',
+            sourceId: 'files:device',
+          ).copyWith(identificationState: MetadataState.offline),
+        ],
+      ),
+    );
+
+    final file = (await repository.snapshot()).files['files:known']!;
+    expect(file.titleId, 'tmdb:movie:1');
+    expect(file.identificationState, MetadataState.offline);
+  });
 }
 
 MediaFile _file({

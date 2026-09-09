@@ -79,6 +79,56 @@ final class FileBrowser: NSObject {
                 return
             }
             listDirectory(path, result: result)
+        case "readSmallText":
+            guard let args = call.arguments as? [String: Any],
+                  let path = args["path"] as? String else {
+                result(FlutterError(code: "bad_args", message: "Missing path", details: nil))
+                return
+            }
+            let maxBytes = min(max(args["maxBytes"] as? Int ?? 65_536, 1), 65_536)
+            resolveAllBookmarks()
+            var sourceURL = URL(fileURLWithPath: path)
+            if let key = args["resumeKey"] as? String, key.hasPrefix("folderbookmark:") {
+                var found = false
+                for (id, root) in bookmarkRoots {
+                    let prefix = "folderbookmark:\(id)/"
+                    guard key.hasPrefix(prefix) else { continue }
+                    let relative = String(key.dropFirst(prefix.count))
+                    let candidate = root.appendingPathComponent(relative).standardizedFileURL
+                    guard !relative.split(separator: "/").contains(".."),
+                          candidate.path.hasPrefix(root.standardizedFileURL.path + "/") else { break }
+                    sourceURL = candidate
+                    found = true
+                    break
+                }
+                guard found else {
+                    result(FlutterError(code: "read_failed", message: "STRM bookmark unavailable", details: nil))
+                    return
+                }
+            }
+            let resolvedSourceURL = sourceURL
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    let handle = try FileHandle(forReadingFrom: resolvedSourceURL)
+                    defer { try? handle.close() }
+                    let data = try handle.read(upToCount: maxBytes + 1) ?? Data()
+                    guard data.count <= maxBytes else {
+                        throw SmallTextReadError.tooLarge
+                    }
+                    guard let text = String(data: data, encoding: .utf8) else {
+                        throw SmallTextReadError.invalidUTF8
+                    }
+                    DispatchQueue.main.async { result(text) }
+                } catch SmallTextReadError.tooLarge {
+                    DispatchQueue.main.async {
+                        result(FlutterError(code: "too_large", message: "Text file exceeds \(maxBytes) bytes", details: nil))
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        result(FlutterError(code: "read_failed", message: error.localizedDescription, details: nil))
+                    }
+                }
+            }
         case "pickFolder":
             presentFolderPicker(result)
         case "pickLibraryFolder":
@@ -186,7 +236,7 @@ final class FileBrowser: NSObject {
             guard let isDirectory else { continue }
             if isDirectory {
                 dirs.append(entryMap(entry, isDirectory: true))
-            } else if isVideo(entry.lastPathComponent) {
+            } else if isSupportedMediaEntry(entry.lastPathComponent) {
                 files.append(entryMap(
                     entry,
                     isDirectory: false,
@@ -226,6 +276,15 @@ final class FileBrowser: NSObject {
         guard let dot = name.lastIndex(of: ".") else { return false }
         let ext = name[name.index(after: dot)...].lowercased()
         return videoExtensions.contains(ext)
+    }
+
+    private static func isSupportedMediaEntry(_ name: String) -> Bool {
+        isVideo(name) || name.lowercased().hasSuffix(".strm")
+    }
+
+    private enum SmallTextReadError: Error {
+        case tooLarge
+        case invalidUTF8
     }
 
     // MARK: - Bookmarks

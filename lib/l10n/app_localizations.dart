@@ -57,6 +57,7 @@ class AppLocalizations {
 
   String _translateDynamic(String source) {
     final patterns = <(RegExp, String Function(Match))>[
+      (RegExp(r'^(\d+) folder levels$'), (m) => '${m[1]} 层子文件夹'),
       (RegExp(r'^Removed (.+)$'), (m) => '已移除 ${m[1]}'),
       (RegExp(r'^Signed in to (.+)$'), (m) => '已登录 ${m[1]}'),
       (RegExp(r'^"(.+)" added to your library$'), (m) => '“${m[1]}”已添加到媒体库'),
@@ -125,6 +126,35 @@ class AppLocalizations {
   }
 
   static const Map<String, String> _zh = {
+    'Scan depth': '扫描层级',
+    'Library scan settings': '媒体库扫描设置',
+    'This STRM file could not be read': '无法读取此 STRM 文件，请检查文件内容与来源连接。',
+    'STRM files are not supported from this network source':
+        '此网络来源暂不支持 STRM，请使用本地文件夹或 WebDAV。',
+    'Maximum folder levels below each library root': '每个媒体库根目录下最多扫描的文件夹层级',
+    'Check for updates': '检查更新',
+    'GitHub rate limit reached. Please try again later.': 'GitHub 请求已限流，请稍后再试。',
+    'No public release is available yet.': '尚未找到公开发布的正式版本。',
+    'The installed version or release information could not be verified.':
+        '无法确认当前版本或发布信息，请稍后重试。',
+    'GitHub release': 'GitHub 正式版本',
+    'Installed version': '当前版本',
+    'New version available': '发现新版本',
+    'Published': '发布日期',
+    'A new version is ready.': '新版本已发布。',
+    'Download the IPA from the release page.': '请在发布页面下载 IPA，并使用现有侧载工具安装更新。',
+    'Later': '稍后',
+    'View release': '查看更新',
+    'You are using the latest version.': '当前已是最新版本。',
+    'Could not check for updates.': '无法检查更新，请稍后重试。',
+    'Cache limit': '缓存上限',
+    'Unlimited': '不限制',
+    'Could not change cache limit.': '无法修改缓存上限。',
+    'Could not clear cache.': '无法清理缓存，请稍后重试。',
+    'Active playback files will be cleared after playback.':
+        '播放中使用的缓存将在播放结束后继续清理。',
+    'Limits temporary files, images and danmaku; keeps your library and watch history.':
+        '限制临时文件、图片和弹幕缓存，保留媒体库与观看记录。',
     'Library': '媒体库',
     'Source library': '资源库',
     'My': '我的',

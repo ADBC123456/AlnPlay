@@ -10,6 +10,7 @@ import '../library/models/library_models.dart';
 import '../library/repository/library_repository.dart';
 import '../library/scanner/library_scanner.dart';
 import '../library/unified_library_service.dart';
+import '../library/widgets/scan_depth_setting.dart';
 import '../models/video_item.dart';
 import '../services/continue_watching.dart';
 import '../services/file_browser.dart';
@@ -17,6 +18,7 @@ import '../services/ftp_client.dart';
 import '../services/jellyfin_client.dart';
 import '../services/library_folders.dart';
 import '../services/smb_client.dart';
+import '../services/strm_playback.dart';
 import '../services/tmdb_client.dart';
 import '../services/webdav_client.dart';
 import '../widgets/library_home_cards.dart';
@@ -376,6 +378,10 @@ class _HomeScreenState extends State<HomeScreen>
       return;
     }
     if (picked == null || !mounted) return;
+    final maxScanDepth = await _chooseScanDepth(
+      LibraryRoot.defaultMaxScanDepth,
+    );
+    if (maxScanDepth == null || !mounted) return;
     final folder = LibraryFolder(
       id:
           picked.bookmarkId ??
@@ -383,6 +389,7 @@ class _HomeScreenState extends State<HomeScreen>
       name: picked.name,
       path: picked.path,
       addedAt: DateTime.now(),
+      maxScanDepth: maxScanDepth,
     );
     await LibraryFoldersStore.add(folder);
     if (!mounted) return;
@@ -391,6 +398,67 @@ class _HomeScreenState extends State<HomeScreen>
     );
     // TMDB poster for the new card resolves in the background.
     _resolveFolderMetadata([folder]);
+  }
+
+  Future<int?> _chooseScanDepth(int initial) async {
+    var selected = initial;
+    return showDialog<int>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const AppText('Library scan settings'),
+          content: ScanDepthSetting(
+            value: selected,
+            onChanged: (value) => setDialogState(() => selected = value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const AppText('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, selected),
+              child: const AppText('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _manageFolder(LibraryFolder folder) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.account_tree_outlined),
+              title: const AppText('Scan depth'),
+              subtitle: AppText('${folder.maxScanDepth} folder levels'),
+              onTap: () => Navigator.pop(sheetContext, 'depth'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const AppText('Remove from library'),
+              onTap: () => Navigator.pop(sheetContext, 'remove'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'remove') {
+      await _removeFolder(folder);
+    } else if (action == 'depth') {
+      final depth = await _chooseScanDepth(folder.maxScanDepth);
+      if (depth == null || depth == folder.maxScanDepth) return;
+      await LibraryFoldersStore.setMaxScanDepth(folder.id, depth);
+      await _loadLibrary();
+      final changed = _folders.where((item) => item.id == folder.id).toList();
+      if (changed.isNotEmpty) await _unifiedLibrary.refresh(changed);
+    }
   }
 
   Future<void> _removeFolder(LibraryFolder folder) async {
@@ -496,10 +564,14 @@ class _HomeScreenState extends State<HomeScreen>
           item.file!,
         )).withMetadataContext(item.metadata);
       } else {
+        final wasTransient = video.uriIsTransient;
+        video = (await refreshStrmPlayback(
+          video,
+        )).withMetadataContext(item.metadata);
         if (video.path != null) {
           await FileBrowserService.instance.resolvePath(video.path!);
         }
-        video = await _restoreWebDavSource(video);
+        if (!wasTransient) video = await _restoreWebDavSource(video);
         video = (await _restoreJellyfinSource(
           video,
         )).withMetadataContext(item.metadata);
@@ -670,8 +742,10 @@ class _HomeScreenState extends State<HomeScreen>
           (p) => p.state == ScanState.queued || p.state == ScanState.scanning,
         )
         .toList();
-    final failedScans = _unifiedLibrary.progressByRoot.values
-        .where((p) => p.state == ScanState.failed)
+    final incompleteScans = _unifiedLibrary.progressByRoot.values
+        .where(
+          (p) => p.state == ScanState.failed || p.state == ScanState.partial,
+        )
         .toList();
     final topInset = MediaQuery.paddingOf(context).top;
     return Scaffold(
@@ -724,6 +798,12 @@ class _HomeScreenState extends State<HomeScreen>
                           ],
                         ),
                   actions: [
+                    if (widget.sourcesOnly)
+                      IconButton(
+                        tooltip: context.tr('Add a source'),
+                        onPressed: _showAddMenu,
+                        icon: const Icon(Icons.add_rounded),
+                      ),
                     if (!widget.sourcesOnly)
                       PopupMenuButton<bool>(
                         tooltip: context.tr('Sort'),
@@ -797,7 +877,7 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ),
                   ),
-                if (!widget.sourcesOnly && failedScans.isNotEmpty)
+                if (!widget.sourcesOnly && incompleteScans.isNotEmpty)
                   SliverToBoxAdapter(
                     child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -806,10 +886,10 @@ class _HomeScreenState extends State<HomeScreen>
                         borderRadius: BorderRadius.circular(12),
                         child: ListTile(
                           leading: const Icon(Icons.sync_problem),
-                          title: AppText('${failedScans.length} 个来源扫描失败'),
+                          title: AppText('${incompleteScans.length} 个来源扫描未完成'),
                           subtitle: const AppText('旧索引已保留，可单独重试失败来源'),
                           trailing: TextButton(
-                            onPressed: () => _retryFailedScans(failedScans),
+                            onPressed: () => _retryFailedScans(incompleteScans),
                             child: const AppText('重试'),
                           ),
                         ),
@@ -848,7 +928,7 @@ class _HomeScreenState extends State<HomeScreen>
                           onTap: () => _openSavedSource(source),
                           onLongPress: source.folder == null
                               ? null
-                              : () => _removeFolder(source.folder!),
+                              : () => _manageFolder(source.folder!),
                         );
                       },
                     ),
@@ -958,13 +1038,6 @@ class _HomeScreenState extends State<HomeScreen>
           ],
         ),
       ),
-      floatingActionButton: widget.sourcesOnly
-          ? FloatingActionButton(
-              onPressed: _showAddMenu,
-              tooltip: context.tr('Add a source'),
-              child: const Icon(Icons.add),
-            )
-          : null,
     );
   }
 

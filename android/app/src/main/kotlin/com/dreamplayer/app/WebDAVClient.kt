@@ -54,7 +54,7 @@ class WebDAVClient(private val context: Context) {
 
         private val VIDEO_EXTENSIONS = setOf(
             "mkv", "mp4", "mov", "avi", "webm", "m4v", "ts", "m2ts", "mts",
-            "wmv", "flv", "mpg", "mpeg", "3gp", "3g2", "vob", "divx", "xvid", "m2v",
+            "wmv", "flv", "mpg", "mpeg", "3gp", "3g2", "vob", "divx", "xvid", "m2v", "strm",
         )
 
         /// Reasonable cap for a downloaded subtitle sidecar (50 MiB — far larger
@@ -148,6 +148,7 @@ class WebDAVClient(private val context: Context) {
                     val url = call.argument<String>("url") ?: ""
                     val headersArg = call.argument<Map<String, String>>("headers")
                     val allowSelfSigned = call.argument<Boolean>("allowSelfSigned") ?: false
+                    val maxBytes = call.argument<Number>("maxBytes")?.toLong()
                     if (url.isEmpty()) {
                         result.error("bad_args", "URL is required", null)
                         return@setMethodCallHandler
@@ -160,6 +161,7 @@ class WebDAVClient(private val context: Context) {
                                 mapOf("Authorization" to server.authorizationHeader)
                             } else headersArg ?: emptyMap(),
                             selfSigned = if (server != null) server.allowSelfSigned else allowSelfSigned,
+                            maxBytes = maxBytes,
                         )
                     }
                 }
@@ -422,6 +424,7 @@ class WebDAVClient(private val context: Context) {
         url: String,
         headers: Map<String, String>,
         selfSigned: Boolean,
+        maxBytes: Long? = null,
     ): ByteArray? {
         // Best-effort by contract (it probes/downloads sidecar subtitles, never
         // plays or tests a user-visible connection): any network failure —
@@ -456,7 +459,8 @@ class WebDAVClient(private val context: Context) {
                                 val n = input.read(buf)
                                 if (n < 0) break
                                 total += n
-                                if (total > MAX_SUB_BYTES) {
+                                val limit = maxBytes?.coerceAtMost(64 * 1024L) ?: MAX_SUB_BYTES.toLong()
+                                if (total > limit) {
                                     Log.w(TAG, "fetchUrl too large $total bytes")
                                     return null
                                 }

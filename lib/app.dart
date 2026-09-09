@@ -12,6 +12,7 @@ import 'theme/app_theme.dart';
 import 'theme/theme_controller.dart';
 import 'l10n/app_localizations.dart';
 import 'widgets/liquid_glass_dock.dart';
+import 'widgets/update_settings_tile.dart';
 
 /// Used by the "Open with" intent handler to navigate without a BuildContext.
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
@@ -101,7 +102,7 @@ class _AlnPlayAppState extends State<AlnPlayApp> {
       ],
       navigatorKey: appNavigatorKey,
       navigatorObservers: [appRouteObserver],
-      home: const RootShell(),
+      home: const UpdateCheckHost(child: RootShell()),
     );
   }
 }
@@ -176,6 +177,8 @@ class _RootShellState extends State<RootShell> {
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
+    final hideDockForKeyboard =
+        _searchActive && mediaQuery.viewInsets.bottom > 0;
     final dockHeight = LiquidGlassDock.heightFor(mediaQuery.textScaler);
     final dockReserve = dockHeight + 24;
     // Android edge-to-edge reports `padding.top == 0` (transparent status
@@ -218,39 +221,41 @@ class _RootShellState extends State<RootShell> {
               ],
             ),
           ),
-          bottomNavigationBar: SafeArea(
-            minimum: const EdgeInsets.symmetric(horizontal: 16),
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Center(
-                heightFactor: 1,
-                child: LiquidGlassDock(
-                  selectedIndex: _selectedIndex,
-                  onDestinationSelected: (index) {
-                    setState(() {
-                      _selectedIndex = index;
-                      _searchActive = false;
-                    });
-                    if (index == 0) _homeRefreshTick.value++;
-                  },
-                  onSearch: () {
-                    if (_searchActive) {
-                      _closeSearch();
-                    } else {
-                      _openSearch();
-                    }
-                  },
-                  searchActive: _searchActive,
-                  labels: [
-                    context.tr('Library'),
-                    context.tr('Source library'),
-                    context.tr('My'),
-                  ],
-                  searchLabel: context.tr('Search'),
+          bottomNavigationBar: hideDockForKeyboard
+              ? null
+              : SafeArea(
+                  minimum: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Center(
+                      heightFactor: 1,
+                      child: LiquidGlassDock(
+                        selectedIndex: _selectedIndex,
+                        onDestinationSelected: (index) {
+                          setState(() {
+                            _selectedIndex = index;
+                            _searchActive = false;
+                          });
+                          if (index == 0) _homeRefreshTick.value++;
+                        },
+                        onSearch: () {
+                          if (_searchActive) {
+                            _closeSearch();
+                          } else {
+                            _openSearch();
+                          }
+                        },
+                        searchActive: _searchActive,
+                        labels: [
+                          context.tr('Library'),
+                          context.tr('Source library'),
+                          context.tr('My'),
+                        ],
+                        searchLabel: context.tr('Search'),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          ),
         ),
       ),
     );

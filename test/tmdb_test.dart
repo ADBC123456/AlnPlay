@@ -8,6 +8,58 @@ import 'package:dream_player/services/tmdb_client.dart';
 
 void main() {
   group('ParsedFileName', () {
+    test('uses only the nearest useful ancestor for numeric episodes', () {
+      final parsed = ParsedFileName.parseWithAncestors('03.mkv', const [
+        '电视剧',
+        'The Bear (2022)',
+        'Season 02',
+      ]);
+      expect(parsed.isEpisode, isTrue);
+      expect(parsed.seriesName, 'The Bear');
+      expect(parsed.year, 2022);
+      expect(parsed.season, 2);
+      expect(parsed.episode, 3);
+    });
+
+    test('recognizes Chinese season directory names', () {
+      final parsed = ParsedFileName.parseWithAncestors('03.mkv', const [
+        '影视',
+        '凡人修仙传',
+        '第二季',
+      ]);
+      expect(parsed.seriesName, '凡人修仙传');
+      expect(parsed.season, 2);
+      expect(parsed.episode, 3);
+    });
+
+    test('explicit season zero is not overwritten by an ancestor season', () {
+      final parsed = ParsedFileName.parseWithAncestors(
+        '凡人修仙传.S00E03.mkv',
+        const ['凡人修仙传', 'Season 02'],
+      );
+      expect(parsed.seasonKnown, isTrue);
+      expect(parsed.season, 0);
+      expect(parsed.episode, 3);
+    });
+
+    test('does not turn a movie year into a loose episode number', () {
+      final parsed = ParsedFileName.parseWithAncestors('Dune 2021.mkv', const [
+        'Movies',
+      ]);
+      expect(parsed.isEpisode, isFalse);
+      expect(parsed.title, 'Dune');
+      expect(parsed.year, 2021);
+    });
+
+    test('filename series evidence wins over ancestor title', () {
+      final parsed = ParsedFileName.parseWithAncestors(
+        'Severance - 03.mkv',
+        const ['Wrong Show', 'Season 01'],
+      );
+      expect(parsed.seriesName, 'Severance');
+      expect(parsed.season, 1);
+      expect(parsed.episode, 3);
+    });
     test('parses a movie title and year from a scene filename', () {
       final parsed = ParsedFileName.parse(
         'The.Great.Movie.2015.1080p.BluRay.x265-GROUP.mkv',

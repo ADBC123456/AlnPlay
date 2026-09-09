@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
+import '../library/source/strm_file.dart';
+import '../library/models/library_models.dart';
+import '../library/source/library_source_adapters.dart';
 import '../library/unified_library_service.dart';
 import '../services/library_folders.dart';
 import '../services/tmdb_client.dart';
@@ -207,6 +210,42 @@ class _WebDavScreenState extends State<WebDavScreen> {
     final server = _browsing;
     if (server == null) return;
 
+    // STRM is a small authenticated source document. Resolve it immediately
+    // through the shared adapter; the resulting target deliberately has no
+    // WebDAV credentials, while its resume key remains the source path.
+    if (isStrmFileName(entry.name)) {
+      try {
+        final video = await WebDavLibrarySourceAdapter(server).resolvePlayable(
+          MediaFile(
+            id: 'webdav_${server.id}${entry.path}',
+            rootIds: {'webdav:${server.id}'},
+            sourceRef: MediaSourceRef(
+              sourceId: 'webdav:${server.id}',
+              sourceType: 'webdav',
+              path: entry.path,
+              serverId: server.id,
+            ),
+            originalFileName: entry.name,
+            sizeBytes: entry.size,
+            legacyResumeKey: 'webdav_${server.id}${entry.path}',
+            isStrm: true,
+          ),
+        );
+        if (!mounted) return;
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => TmdDetailsScreen(video: video),
+          ),
+        );
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: AppText('This STRM file could not be read')),
+        );
+      }
+      return;
+    }
+
     String authHeader;
     try {
       authHeader = await _webdav.authorizationHeader(server.id);
@@ -217,7 +256,9 @@ class _WebDavScreenState extends State<WebDavScreen> {
 
     final base = server.url.replaceAll(RegExp(r'/+$'), '');
     // Playlist = every video in this folder; used to find the tapped entry.
-    final videos = _entries.where((e) => !e.isDirectory).toList();
+    final videos = _entries
+        .where((e) => !e.isDirectory && !isStrmFileName(e.name))
+        .toList();
     final playlist = [
       for (final v in videos)
         () {

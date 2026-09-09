@@ -44,6 +44,7 @@ class LibraryFolder {
     this.networkShare,
     this.networkPath,
     this.networkLabel,
+    this.maxScanDepth = 6,
   });
 
   /// Bookmark id from the folder picker (`FileEntry.bookmarkId`), or a
@@ -75,6 +76,7 @@ class LibraryFolder {
   final String? networkShare;
   final String? networkPath;
   final String? networkLabel;
+  final int maxScanDepth;
 
   bool get isJellyfin => source == LibraryFolderSource.jellyfin;
   bool get isNetwork => source != LibraryFolderSource.files;
@@ -83,19 +85,35 @@ class LibraryFolder {
   /// `folder:` prefix keeps it clear of per-video identity keys.
   String get metadataKey => 'folder:$id';
 
+  LibraryFolder copyWith({int? maxScanDepth}) => LibraryFolder(
+    id: id,
+    name: name,
+    path: path,
+    addedAt: addedAt,
+    source: source,
+    jellyfinServerUrl: jellyfinServerUrl,
+    jellyfinItemId: jellyfinItemId,
+    networkServerId: networkServerId,
+    networkShare: networkShare,
+    networkPath: networkPath,
+    networkLabel: networkLabel,
+    maxScanDepth: (maxScanDepth ?? this.maxScanDepth).clamp(1, 20).toInt(),
+  );
+
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'path': path,
-        'addedAtMs': addedAt.millisecondsSinceEpoch,
-        'source': source.name,
-        'jellyfinServerUrl': jellyfinServerUrl,
-        'jellyfinItemId': jellyfinItemId,
-        'networkServerId': networkServerId,
-        'networkShare': networkShare,
-        'networkPath': networkPath,
-        'networkLabel': networkLabel,
-      };
+    'id': id,
+    'name': name,
+    'path': path,
+    'addedAtMs': addedAt.millisecondsSinceEpoch,
+    'source': source.name,
+    'jellyfinServerUrl': jellyfinServerUrl,
+    'jellyfinItemId': jellyfinItemId,
+    'networkServerId': networkServerId,
+    'networkShare': networkShare,
+    'networkPath': networkPath,
+    'networkLabel': networkLabel,
+    'maxScanDepth': maxScanDepth,
+  };
 
   factory LibraryFolder.fromJson(Map<String, dynamic> json) {
     final source = switch (json['source'] as String?) {
@@ -120,6 +138,9 @@ class LibraryFolder {
       networkShare: json['networkShare'] as String?,
       networkPath: json['networkPath'] as String?,
       networkLabel: json['networkLabel'] as String?,
+      maxScanDepth: ((json['maxScanDepth'] as num?)?.toInt() ?? 6)
+          .clamp(1, 20)
+          .toInt(),
     );
   }
 }
@@ -167,6 +188,19 @@ class LibraryFoldersStore {
     await prefs.setString(
       _prefsKey,
       jsonEncode(all.map((f) => f.toJson()).toList()),
+    );
+    changes.notify();
+  }
+
+  static Future<void> setMaxScanDepth(String id, int depth) async {
+    final all = await load();
+    final index = all.indexWhere((folder) => folder.id == id);
+    if (index < 0) return;
+    all[index] = all[index].copyWith(maxScanDepth: depth);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _prefsKey,
+      jsonEncode(all.map((folder) => folder.toJson()).toList()),
     );
     changes.notify();
   }

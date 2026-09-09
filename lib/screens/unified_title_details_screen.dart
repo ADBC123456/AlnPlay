@@ -186,6 +186,10 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
         .toList();
 
     final media = MediaQuery.of(context);
+    final contentInsets = EdgeInsets.only(
+      left: media.viewPadding.left > 24 ? media.viewPadding.left : 24,
+      right: media.viewPadding.right > 24 ? media.viewPadding.right : 24,
+    );
     final textScale = media.textScaler.scale(14) / 14;
     final heroHeight =
         (media.size.width >= 900
@@ -212,6 +216,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
               child: SizedBox(
                 height: heroHeight,
                 child: _TitleHero(
+                  contentInsets: contentInsets,
                   title: title,
                   ownedEpisodes: episodes.length,
                   playLabel: _primaryLabel(),
@@ -235,32 +240,24 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
             ),
             if (title.overview.isNotEmpty)
               SliverToBoxAdapter(
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: 920),
+                child: Padding(
+                  padding: contentInsets.copyWith(bottom: 18),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () =>
+                        setState(() => _overviewExpanded = !_overviewExpanded),
                     child: Padding(
-                      padding: EdgeInsets.fromLTRB(24, 0, 24, 18),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(6),
-                        onTap: () => setState(
-                          () => _overviewExpanded = !_overviewExpanded,
-                        ),
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(vertical: 5),
-                          child: AppText(
-                            title.overview,
-                            maxLines: _overviewExpanded ? null : 3,
-                            overflow: _overviewExpanded
-                                ? TextOverflow.visible
-                                : TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurfaceVariant,
-                              fontSize: 14,
-                              height: 1.55,
-                            ),
-                          ),
+                      padding: EdgeInsets.symmetric(vertical: 5),
+                      child: AppText(
+                        title.overview,
+                        maxLines: _overviewExpanded ? null : 3,
+                        overflow: _overviewExpanded
+                            ? TextOverflow.visible
+                            : TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontSize: 14,
+                          height: 1.55,
                         ),
                       ),
                     ),
@@ -269,29 +266,27 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
               ),
             if (title.kind == MediaTitleKind.tv) ...[
               SliverToBoxAdapter(
-                child: Center(
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: 960),
-                    child: _SeasonHeader(
-                      seasons: seasons,
-                      selected: _selectedSeason,
-                      onSelected: (season) {
-                        _requestedDanmakuScope = null;
-                        setState(() => _selectedSeason = season);
-                      },
-                      onEpisodes: () =>
-                          _openEpisodePicker(title, visibleEpisodes),
-                      onDanmaku: visibleEpisodes.isEmpty
-                          ? null
-                          : () => _openDanmaku(
-                              title,
-                              _selectedSeason,
+                child: Padding(
+                  padding: contentInsets,
+                  child: _SeasonHeader(
+                    seasons: seasons,
+                    selected: _selectedSeason,
+                    onSelected: (season) {
+                      _requestedDanmakuScope = null;
+                      setState(() => _selectedSeason = season);
+                    },
+                    onEpisodes: () =>
+                        _openEpisodePicker(title, visibleEpisodes),
+                    onDanmaku: visibleEpisodes.isEmpty
+                        ? null
+                        : () => _openDanmaku(
+                            title,
+                            _selectedSeason,
+                            visibleEpisodes,
+                            suggestedEpisode: _suggestedDanmakuEpisode(
                               visibleEpisodes,
-                              suggestedEpisode: _suggestedDanmakuEpisode(
-                                visibleEpisodes,
-                              ),
                             ),
-                    ),
+                          ),
                   ),
                 ),
               ),
@@ -305,7 +300,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
               else if (visibleEpisodes.isEmpty)
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: EdgeInsets.fromLTRB(24, 20, 24, 32),
+                    padding: contentInsets.copyWith(top: 20, bottom: 32),
                     child: AppText(
                       '这一季暂时没有可播放的剧集',
                       style: TextStyle(
@@ -316,18 +311,21 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
                 )
               else
                 SliverToBoxAdapter(
-                  child: _EpisodeRail(
-                    key: ValueKey(_selectedSeason),
-                    targetEpisodeId: _target?.episode.id,
-                    focusRevision: _focusRevision,
-                    episodes: visibleEpisodes,
-                    versionsFor: snapshot.versionsForEpisode,
-                    progressFor: _episodeProgress,
-                    danmakuFor: _episodeDanmaku,
-                    onPlay: (episode, versions) =>
-                        _chooseAndPlay(title, episode, versions),
-                    onMore: (episode, versions) =>
-                        _showEpisodeActions(title, episode, versions),
+                  child: Padding(
+                    padding: contentInsets,
+                    child: _EpisodeRail(
+                      key: ValueKey(_selectedSeason),
+                      targetEpisodeId: _target?.episode.id,
+                      focusRevision: _focusRevision,
+                      episodes: visibleEpisodes,
+                      versionsFor: snapshot.versionsForEpisode,
+                      progressFor: _episodeProgress,
+                      danmakuFor: _episodeDanmaku,
+                      onPlay: (episode, versions) =>
+                          _chooseAndPlay(title, episode, versions),
+                      onMore: (episode, versions) =>
+                          _showEpisodeActions(title, episode, versions),
+                    ),
                   ),
                 ),
               if (duplicates.isNotEmpty)
@@ -339,7 +337,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
                 ),
             ] else
               SliverPadding(
-                padding: EdgeInsets.fromLTRB(24, 8, 24, 0),
+                padding: contentInsets.copyWith(top: 8),
                 sliver: SliverList.builder(
                   itemCount: files.length,
                   itemBuilder: (_, index) => ListTile(
@@ -850,6 +848,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
 
 class _TitleHero extends StatelessWidget {
   const _TitleHero({
+    required this.contentInsets,
     required this.title,
     required this.ownedEpisodes,
     required this.playLabel,
@@ -863,6 +862,7 @@ class _TitleHero extends StatelessWidget {
   });
 
   final MediaTitle title;
+  final EdgeInsets contentInsets;
   final int ownedEpisodes;
   final String playLabel;
   final bool opening;
@@ -900,53 +900,42 @@ class _TitleHero extends StatelessWidget {
         ),
         SafeArea(
           bottom: false,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: 960),
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(
-                  wide ? 28 : 12,
-                  10,
-                  wide ? 28 : 12,
-                  0,
-                ),
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      _CircleButton(
-                        tooltip: '返回',
-                        icon: Icons.arrow_back_ios_new_rounded,
-                        onPressed: onBack,
+          left: false,
+          right: false,
+          child: Padding(
+            padding: contentInsets.copyWith(top: 10, bottom: 0),
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _CircleButton(
+                    tooltip: '返回',
+                    icon: Icons.arrow_back_ios_new_rounded,
+                    onPressed: onBack,
+                  ),
+                  PopupMenuButton<String>(
+                    tooltip: '更多操作',
+                    onSelected: onMenu,
+                    color: Theme.of(context).colorScheme.surfaceContainer,
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                        value: 'refresh',
+                        child: _MenuRow(Icons.refresh, '刷新刮削信息'),
                       ),
-                      PopupMenuButton<String>(
-                        tooltip: '更多操作',
-                        onSelected: onMenu,
-                        color: Theme.of(context).colorScheme.surfaceContainer,
-                        itemBuilder: (_) => [
-                          PopupMenuItem(
-                            value: 'refresh',
-                            child: _MenuRow(Icons.refresh, '刷新刮削信息'),
-                          ),
-                          if (title.kind == MediaTitleKind.tv)
-                            PopupMenuItem(
-                              value: 'danmaku',
-                              child: _MenuRow(
-                                Icons.subtitles_outlined,
-                                '匹配当前季弹幕',
-                              ),
-                            ),
-                          PopupMenuItem(
-                            value: 'copy',
-                            child: _MenuRow(Icons.copy_outlined, '复制片名'),
-                          ),
-                        ],
-                        child: _CircleSurface(loading: refreshing),
+                      if (title.kind == MediaTitleKind.tv)
+                        PopupMenuItem(
+                          value: 'danmaku',
+                          child: _MenuRow(Icons.subtitles_outlined, '匹配当前季弹幕'),
+                        ),
+                      PopupMenuItem(
+                        value: 'copy',
+                        child: _MenuRow(Icons.copy_outlined, '复制片名'),
                       ),
                     ],
+                    child: _CircleSurface(loading: refreshing),
                   ),
-                ),
+                ],
               ),
             ),
           ),
@@ -955,82 +944,73 @@ class _TitleHero extends StatelessWidget {
           left: 0,
           right: 0,
           bottom: wide ? 24 : 18,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: 960),
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: wide ? 38 : 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    AppText(
-                      title.displayTitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurface,
-                        fontSize: wide ? 34 : 28,
-                        height: 1.08,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -.4,
+          child: Padding(
+            padding: contentInsets,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AppText(
+                  title.displayTitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface,
+                    fontSize: wide ? 34 : 28,
+                    height: 1.08,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -.4,
+                  ),
+                ),
+                SizedBox(height: 17),
+                if (wide && MediaQuery.textScalerOf(context).scale(14) <= 18)
+                  Row(
+                    children: [
+                      Flexible(
+                        child: _PlayButton(
+                          label: playLabel,
+                          loading: opening,
+                          enabled: canPlay,
+                          onTap: onPlay,
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 17),
-                    if (wide &&
-                        MediaQuery.textScalerOf(context).scale(14) <= 18)
-                      Row(
-                        children: [
-                          Flexible(
-                            child: _PlayButton(
-                              label: playLabel,
-                              loading: opening,
-                              enabled: canPlay,
-                              onTap: onPlay,
-                            ),
-                          ),
-                          if (onPlayMpv != null) ...[
-                            SizedBox(width: 10),
-                            _MpvButton(
-                              enabled: canPlay && !opening,
-                              onTap: onPlayMpv!,
-                            ),
-                          ],
-                          SizedBox(width: 20),
-                          Expanded(
-                            child: _Metadata(
-                              title: title,
-                              owned: ownedEpisodes,
-                            ),
-                          ),
-                        ],
-                      )
-                    else ...[
-                      _Metadata(title: title, owned: ownedEpisodes),
-                      SizedBox(height: 13),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _PlayButton(
-                              label: playLabel,
-                              loading: opening,
-                              enabled: canPlay,
-                              onTap: onPlay,
-                            ),
-                          ),
-                          if (onPlayMpv != null) ...[
-                            SizedBox(width: 10),
-                            _MpvButton(
-                              enabled: canPlay && !opening,
-                              onTap: onPlayMpv!,
-                            ),
-                          ],
-                        ],
+                      if (onPlayMpv != null) ...[
+                        SizedBox(width: 10),
+                        _MpvButton(
+                          enabled: canPlay && !opening,
+                          onTap: onPlayMpv!,
+                        ),
+                      ],
+                      SizedBox(width: 20),
+                      Expanded(
+                        child: _Metadata(title: title, owned: ownedEpisodes),
                       ),
                     ],
-                  ],
-                ),
-              ),
+                  )
+                else ...[
+                  _Metadata(title: title, owned: ownedEpisodes),
+                  SizedBox(height: 13),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _PlayButton(
+                          label: playLabel,
+                          loading: opening,
+                          enabled: canPlay,
+                          onTap: onPlay,
+                        ),
+                      ),
+                      if (onPlayMpv != null) ...[
+                        SizedBox(width: 10),
+                        _MpvButton(
+                          enabled: canPlay && !opening,
+                          onTap: onPlayMpv!,
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ],
             ),
           ),
         ),
@@ -1264,7 +1244,7 @@ class _SeasonHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: EdgeInsets.fromLTRB(18, 4, 12, 7),
+    padding: EdgeInsets.fromLTRB(0, 4, 0, 7),
     child: Row(
       children: [
         Expanded(

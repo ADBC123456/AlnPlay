@@ -111,14 +111,26 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
-  testWidgets('reduced motion changes selection without a sliding animation', (
+  testWidgets('dragging the lens commits the nearest destination once', (
     tester,
   ) async {
+    final selected = <int>[];
+    await tester.pumpWidget(host(onDestinationSelected: selected.add));
+    await tester.pump();
+
+    await tester.drag(find.text('媒体库'), const Offset(190, 0));
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(selected, [2]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('reduced motion keeps the selection lens usable', (tester) async {
     await tester.pumpWidget(host(disableAnimations: true));
     await tester.pumpWidget(host(disableAnimations: true, selectedIndex: 2));
-    final selection = tester.widget<AnimatedAlign>(find.byType(AnimatedAlign));
-    expect(selection.duration, Duration.zero);
-    expect(selection.alignment, const AlignmentDirectional(1, 0));
+    await tester.pump();
+
+    expect(find.byKey(const Key('dock-selection-lens')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

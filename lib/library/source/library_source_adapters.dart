@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../models/video_item.dart';
 import '../../services/file_browser.dart';
 import '../../services/ftp_client.dart';
@@ -8,6 +10,7 @@ import '../../services/upnp_client.dart';
 import '../../services/webdav_client.dart';
 import '../../utils/file_info_extractor.dart';
 import '../models/library_models.dart';
+import 'strm_file.dart';
 
 class LibraryAdapterBundle {
   const LibraryAdapterBundle({required this.roots, required this.adapters});
@@ -109,6 +112,10 @@ class LibraryAdapterBundle {
     id: folder.id,
     sourceId: sourceId,
     displayName: folder.name,
+    maxScanDepth: folder.maxScanDepth.clamp(
+      LibraryRoot.minimumMaxScanDepth,
+      LibraryRoot.maximumMaxScanDepth,
+    ),
     directory: SourceDirectory(
       sourceId: sourceId,
       sourceType: folder.source.name,
@@ -121,7 +128,8 @@ class LibraryAdapterBundle {
   );
 }
 
-class LocalLibrarySourceAdapter implements LibrarySourceAdapter {
+class LocalLibrarySourceAdapter
+    implements LibrarySourceAdapter, SmallTextLibrarySourceAdapter {
   @override
   String get sourceId => 'files:device';
 
@@ -155,6 +163,7 @@ class LocalLibrarySourceAdapter implements LibrarySourceAdapter {
                   ),
             sizeBytes: entry.size,
             legacyResumeKey: entry.resumeKey ?? entry.path,
+            isStrm: isStrmFileName(entry.name),
           ),
       ],
     );
@@ -165,6 +174,22 @@ class LocalLibrarySourceAdapter implements LibrarySourceAdapter {
     await FileBrowserService.instance.resolvePath(file.sourceRef.path);
     final info = extractFileInfo(file.originalFileName);
     final path = file.sourceRef.path;
+    if (file.isStrm) {
+      final text = await readSmallText(file);
+      final target = parseExternalStrm(text ?? '');
+      return VideoItem(
+        id: file.id,
+        title: file.originalFileName.replaceFirst(
+          RegExp(r'\.strm$', caseSensitive: false),
+          '',
+        ),
+        uri: target.toString(),
+        path: path,
+        resumeKey: file.legacyResumeKey,
+        duration: Duration.zero,
+        uriIsTransient: true,
+      );
+    }
     return VideoItem(
       id: file.id,
       title: file.originalFileName,
@@ -180,9 +205,18 @@ class LocalLibrarySourceAdapter implements LibrarySourceAdapter {
       hdrHint: info.hdrHint,
     );
   }
+
+  @override
+  Future<String?> readSmallText(MediaFile file, {int maxBytes = 65536}) =>
+      FileBrowserService.instance.readSmallText(
+        file.sourceRef.path,
+        maxBytes: maxBytes,
+        resumeKey: file.legacyResumeKey,
+      );
 }
 
-class WebDavLibrarySourceAdapter implements LibrarySourceAdapter {
+class WebDavLibrarySourceAdapter
+    implements LibrarySourceAdapter, SmallTextLibrarySourceAdapter {
   WebDavLibrarySourceAdapter(this.server);
 
   final WebDavServer server;
@@ -222,13 +256,48 @@ class WebDavLibrarySourceAdapter implements LibrarySourceAdapter {
                   ),
             sizeBytes: entry.size,
             legacyResumeKey: 'webdav_${server.id}${entry.path}',
+            isStrm: isStrmFileName(entry.name),
           ),
       ],
     );
   }
 
   @override
+  Future<String?> readSmallText(MediaFile file, {int maxBytes = 65536}) async {
+    if (maxBytes <= 0 || maxBytes > 65536) {
+      throw ArgumentError.value(
+        maxBytes,
+        'maxBytes',
+        'must be between 1 and 65536',
+      );
+    }
+    if (!isStrmFileName(file.originalFileName) ||
+        file.sourceRef.serverId != server.id) {
+      return null;
+    }
+    final base = server.url.replaceAll(RegExp(r'/+$'), '');
+    final bytes = await WebDavClient.instance.fetchUrl(
+      serverId: server.id,
+      url: '$base${_encodePath(file.sourceRef.path)}',
+      maxBytes: maxBytes,
+    );
+    return bytes == null ? null : utf8.decode(bytes);
+  }
+
+  @override
   Future<VideoItem> resolvePlayable(MediaFile file) async {
+    if (isStrmFileName(file.originalFileName)) {
+      final target = parseExternalStrm(await readSmallText(file) ?? '');
+      return VideoItem(
+        id: file.id,
+        title: file.originalFileName,
+        uri: target.toString(),
+        uriIsTransient: true,
+        resumeKey: file.legacyResumeKey,
+        duration: Duration.zero,
+        sizeBytes: file.sizeBytes,
+      );
+    }
     String authorization = '';
     try {
       authorization = await WebDavClient.instance.authorizationHeader(

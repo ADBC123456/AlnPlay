@@ -22,6 +22,9 @@ import '../danmaku/presentation/danmaku_overlay.dart';
 import '../danmaku/service/danmaku_service.dart';
 import '../danmaku/settings/danmaku_display_settings.dart';
 import '../services/continue_watching.dart';
+import '../services/cache_quota_manager.dart';
+import '../services/strm_playback.dart';
+import '../library/source/strm_file.dart';
 import '../services/badge_prefs.dart';
 import '../services/audio_track_store.dart';
 import '../services/exo_player.dart';
@@ -420,6 +423,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   @override
   void initState() {
     super.initState();
+    if (!_inTests) CacheQuotaManager.instance.beginPlayback();
     WidgetsBinding.instance.addObserver(this);
     // Keep the system UI mode constant (immersive) for the whole player
     // screen. Toggling immersive/edgeToEdge during the rotation transition
@@ -687,6 +691,15 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<bool> _openCurrent() async {
     _endHoldSpeed();
+    if (_current.uriIsTransient) {
+      try {
+        _current = await refreshStrmPlayback(_current);
+      } catch (_) {
+        _setTerminalError('This STRM file could not be read');
+        return false;
+      }
+      if (!mounted) return false;
+    }
     final video = _current;
     // A new video means a previous software-decode fallback was for the last
     // file only — restore the user's original decoder mode now.
@@ -771,7 +784,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _preparedExoEvent = null;
     try {
       await _exo!.open(
-        video.path ?? '',
+        video.uriIsTransient ? '' : (video.path ?? ''),
         uri: video.uri,
         subtitleUri: video.subtitleUri,
         startPositionMs: resume?.inMilliseconds,
@@ -925,6 +938,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   Future<void> _startMpvPrimary() async {
     if (_inTests) return;
     try {
+      if (_current.uriIsTransient) {
+        _current = await refreshStrmPlayback(_current);
+      }
+      if (!mounted) return;
       await _loadDanmakuForVideo(_current);
       final subs = await _resolveExternalSubtitles(_current);
       if (subs.isNotEmpty) _current = _current.withExternalSubtitles(subs);
@@ -1163,11 +1180,18 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   Future<void> _mpvOpen(Player player, VideoItem video, int startMs) async {
+    if (video.uriIsTransient &&
+        (video.uri == null || isStrmFileName(Uri.parse(video.uri!).path))) {
+      video = await refreshStrmPlayback(video);
+      _current = video;
+    }
     // A previous SMB-backed mpv session left a loopback bridge running — tear
     // it down before pointing mpv at the next source.
     await _stopMpvProxy();
     final src = _mpvSourceFor(video);
-    debugPrint('mpv: opening source: $src');
+    debugPrint(
+      'mpv: opening ${video.uriIsTransient ? 'STRM target' : 'source'}',
+    );
     if (src.isEmpty) {
       _markMpvFailed('No playable source for this video.');
       return;
@@ -1834,7 +1858,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final externalSubs = await _resolveExternalSubtitles(video);
     try {
       await _exo?.open(
-        video.path ?? '',
+        video.uriIsTransient ? '' : (video.path ?? ''),
         uri: video.uri,
         subtitleUri: video.subtitleUri,
         startPositionMs: pos.inMilliseconds,
@@ -2335,12 +2359,14 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
         return videos.map((e) {
           final isContent = e.path.startsWith('content://');
+          final isStrm = isStrmFileName(e.name);
           final fi = extractFileInfo(e.name);
           return VideoItem(
             id: 'folder_next_${e.path.hashCode}',
             title: e.name,
-            path: isContent ? null : e.path,
-            uri: isContent ? e.path : null,
+            path: isContent && !isStrm ? null : e.path,
+            uri: isContent && !isStrm ? e.path : null,
+            uriIsTransient: isStrm,
             resumeKey: e.resumeKey,
             duration: Duration.zero,
             sizeBytes: e.size,
@@ -2559,11 +2585,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       _exo?.setBrightness(-1);
     }
     _exoSub?.cancel();
-    _exo?.dispose();
+    final nativeDisposal = _exo?.dispose() ?? Future<void>.value();
     for (final s in _mpvSubs) {
       s.cancel();
     }
-    unawaited(_mpvPlayer?.dispose());
+    final mpvDisposal = _mpvPlayer?.dispose() ?? Future<void>.value();
     _danmakuLoadGeneration++;
     _danmakuCanvasController = null;
     _danmakuClockController.close();
@@ -2581,6 +2607,16 @@ class _PlayerScreenState extends State<PlayerScreen>
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _playerFocusScopeNode.dispose();
     _playPauseFocusNode.dispose();
+    if (!_inTests) {
+      // Keep subtitle files leased until both backends acknowledge teardown.
+      unawaited(
+        Future.wait([nativeDisposal, mpvDisposal])
+            .then((_) => CacheQuotaManager.instance.endPlayback())
+            .catchError((Object _) {
+              /* Retain leases if teardown failed. */
+            }),
+      );
+    }
     super.dispose();
   }
 
@@ -4014,6 +4050,8 @@ class _PlayerScreenState extends State<PlayerScreen>
           title: _current.title,
           path: _current.path,
           uri: _current.uri,
+          uriIsTransient: _current.uriIsTransient,
+          metadataContext: _current.metadataContext,
           resumeKey: _current.resumeKey,
           duration: _current.duration,
           sizeBytes: _current.sizeBytes,
@@ -4078,6 +4116,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       title: _current.title,
       path: _current.path,
       uri: _current.uri,
+      uriIsTransient: _current.uriIsTransient,
+      metadataContext: _current.metadataContext,
       resumeKey: _current.resumeKey,
       duration: _current.duration,
       sizeBytes: _current.sizeBytes,
@@ -4125,7 +4165,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!await sub.exists()) await sub.create(recursive: true);
     final safe = fileName.replaceAll(RegExp(r'[^\w.\-]'), '_');
     final f = File('${sub.path}/$safe');
-    await f.writeAsBytes(bytes, flush: true);
+    if (!await CacheQuotaManager.instance.write(f, bytes)) {
+      throw const FileSystemException('Subtitle cache capacity reached');
+    }
     return f.path;
   }
 
@@ -4183,6 +4225,8 @@ class _PlayerScreenState extends State<PlayerScreen>
         title: _current.title,
         path: _current.path,
         uri: _current.uri,
+        uriIsTransient: _current.uriIsTransient,
+        metadataContext: _current.metadataContext,
         resumeKey: _current.resumeKey,
         duration: _current.duration,
         sizeBytes: _current.sizeBytes,

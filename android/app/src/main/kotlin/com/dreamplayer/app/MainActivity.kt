@@ -114,6 +114,13 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dreamplayer/app_info")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "version" -> result.success(packageManager.getPackageInfo(packageName, 0).versionName)
+                    else -> result.notImplemented()
+                }
+            }
         // Engine-agnostic OS controls — brightness (per-app window brightness)
         // and system media volume. Used by the MPV fallback engine because
         // ExoPlayerView (the only other owner of these handlers) is not

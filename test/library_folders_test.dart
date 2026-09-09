@@ -32,6 +32,7 @@ void main() {
       expect(restored.path, '/sdcard/Movies');
       expect(restored.addedAt, original.addedAt);
       expect(restored.isJellyfin, false);
+      expect(restored.maxScanDepth, 6);
     });
 
     test('metadataKey is folder:<id>', () {
@@ -96,10 +97,18 @@ void main() {
       expect(loaded.map((f) => f.id), ['b']);
     });
 
+    test('scan depth persists and is clamped to 1 through 20', () async {
+      await LibraryFoldersStore.add(folder('a'));
+      await LibraryFoldersStore.setMaxScanDepth('a', 12);
+      expect((await LibraryFoldersStore.load()).single.maxScanDepth, 12);
+      await LibraryFoldersStore.setMaxScanDepth('a', 99);
+      expect((await LibraryFoldersStore.load()).single.maxScanDepth, 20);
+    });
+
     test('corrupt json falls back to empty', () async {
-      SharedPreferences.setMockInitialValues(
-        {'dreamplayer.libraryFolders': 'not json'},
-      );
+      SharedPreferences.setMockInitialValues({
+        'dreamplayer.libraryFolders': 'not json',
+      });
       expect(await LibraryFoldersStore.load(), isEmpty);
     });
   });

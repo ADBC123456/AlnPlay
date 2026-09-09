@@ -61,4 +61,19 @@ void main() {
     expect(restored.webdavServerId, 'server');
     expect(restored.httpHeaders, isEmpty);
   });
+
+  test('does not persist a transient STRM target URL', () {
+    const strmVideo = VideoItem(
+      id: 'tree:library/Movie.strm',
+      title: 'Movie',
+      uri: 'https://cdn.example/movie.mkv?token=secret',
+      resumeKey: 'tree:library/Movie.strm',
+      duration: Duration.zero,
+      uriIsTransient: true,
+    );
+    final json = strmVideo.toJson();
+    expect(json['uri'], isNull);
+    expect(json.toString(), isNot(contains('secret')));
+    expect(json['resumeKey'], 'tree:library/Movie.strm');
+  });
 }

@@ -117,19 +117,14 @@ class WebDavClient {
     String password = '',
     bool allowSelfSigned = false,
   }) async {
-    final result = await _channel.invokeMapMethod<String, dynamic>(
-      'testConnection',
-      {
-        'url': url,
-        'username': username,
-        'password': password,
-        'allowSelfSigned': allowSelfSigned,
-      },
-    );
-    return (
-      ok: result?['ok'] == true,
-      error: result?['error'] as String?,
-    );
+    final result = await _channel
+        .invokeMapMethod<String, dynamic>('testConnection', {
+          'url': url,
+          'username': username,
+          'password': password,
+          'allowSelfSigned': allowSelfSigned,
+        });
+    return (ok: result?['ok'] == true, error: result?['error'] as String?);
   }
 
   /// Lists a folder at [path] (relative to the server root, `/` for the root).
@@ -148,12 +143,14 @@ class WebDavClient {
   /// (e.g. `Basic base64(user:pass)`). Used to build the HTTP headers passed
   /// to the player for WebDAV video URLs.
   Future<String> authorizationHeader(String serverId) async {
-    final result = await _channel.invokeMethod<String>(
-      'authorizationHeader',
-      {'id': serverId},
-    );
+    final result = await _channel.invokeMethod<String>('authorizationHeader', {
+      'id': serverId,
+    });
     if (result == null || result.isEmpty) {
-      throw PlatformException(code: 'authorizationHeader', message: 'No auth header');
+      throw PlatformException(
+        code: 'authorizationHeader',
+        message: 'No auth header',
+      );
     }
     return result;
   }
@@ -169,12 +166,14 @@ class WebDavClient {
     required String url,
     Map<String, String> headers = const {},
     bool allowSelfSigned = false,
+    int? maxBytes,
   }) async {
     final result = await _channel.invokeMethod<Uint8List>('fetchUrl', {
       if (serverId != null && serverId.isNotEmpty) 'id': serverId,
       'url': url,
       if (headers.isNotEmpty) 'headers': headers,
       if (allowSelfSigned) 'allowSelfSigned': true,
+      'maxBytes': ?maxBytes,
     });
     return result;
   }

@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
+import '../library/source/strm_file.dart';
 import '../services/file_browser.dart';
 import '../services/tmdb_client.dart';
-import '../utils/file_info_extractor.dart';
 import '../widgets/tv_overscan.dart';
 import '../widgets/tv_tile.dart';
 import 'tmd_details_screen.dart';
@@ -128,45 +128,42 @@ class _FileBrowserScreenState extends State<FileBrowserScreen>
         // play whatever video the user picks.
         final picked = await _service.openFilesHome();
         if (picked == null || !mounted) return;
-        _playVideo(picked);
+        await _playVideo(picked);
         return;
       }
       setState(() => _loading = true);
       await _load(entry.path);
     } else {
-      _playVideo(entry);
+      await _playVideo(entry);
     }
   }
 
   /// Opens a video's details page first (TMDB metadata + Play/Resume button),
   /// like the WebDAV/Jellyfin browsers.
-  void _playVideo(FileEntry entry) {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => TmdDetailsScreen(video: _toVideoItem(entry)),
-      ),
-    );
+  Future<void> _playVideo(FileEntry entry) async {
+    try {
+      final video = await entry.resolvePlayable(
+        id: 'file_${entry.playbackIdentity.hashCode}',
+      );
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => TmdDetailsScreen(video: video)),
+      );
+    } on StrmFormatException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } on PlatformException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This STRM file could not be read')),
+      );
+    }
   }
 
   VideoItem _toVideoItem(FileEntry entry) {
-    // Bookmarked-tree videos come back as content:// URIs (no real file
-    // path), so hand those to the player's `uri` field.
-    final isContentUri = entry.path.startsWith('content://');
-    final info = extractFileInfo(entry.name);
-    return VideoItem(
-      id: 'file_${entry.path.hashCode}',
-      title: entry.name,
-      path: isContentUri ? null : entry.path,
-      uri: isContentUri ? entry.path : null,
-      resumeKey: entry.resumeKey,
-      duration: Duration.zero,
-      sizeBytes: entry.size,
-      videoCodec: info.videoCodec,
-      audioCodec: info.audioCodec,
-      audioChannels: info.audioChannels,
-      resolution: info.resolution,
-      hdrHint: info.hdrHint,
-    );
+    return entry.toVideoItem(id: 'file_${entry.playbackIdentity.hashCode}');
   }
 
   Future<void> _goUp() async {

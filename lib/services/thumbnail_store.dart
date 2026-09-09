@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/video_item.dart';
 import 'file_browser.dart';
 import 'tmdb_client.dart';
+import 'cache_quota_manager.dart';
 
 /// Pure cache-file name for an identity key: FNV-1a 32-bit hex + a sanitized
 /// tail of the key so the temp folder stays human-scannable. Exposed for
@@ -41,6 +43,7 @@ class ThumbnailStore {
   static final Map<String, Uint8List?> _memory = {};
   static final Map<String, Future<Uint8List?>> _inFlight = {};
   static Directory? _cacheDirOverride;
+  static int _quotaRevision = 0;
 
   /// Test seam.
   static void setCacheDirForTesting(Directory? dir) {
@@ -63,12 +66,29 @@ class ThumbnailStore {
   /// cached in memory and on disk keyed by the same stable identity the TMDB
   /// cache uses, so a lookup is one disk read after the first time.
   static Future<Uint8List?> artFor(VideoItem video) {
+    if (_quotaRevision != CacheQuotaManager.instance.evictionRevision) {
+      _memory.clear();
+      _quotaRevision = CacheQuotaManager.instance.evictionRevision;
+    }
     final key = TmdStore.identityKeyFor(video);
     if (key.isEmpty || _isRemote(video) || !_isLocal(video)) {
       return Future.value(null);
     }
     final memo = _memory[key];
-    if (memo != null) return Future.value(memo);
+    if (memo != null) {
+      if (_cacheDirOverride == null) {
+        unawaited(
+          _cacheDir()
+              .then(
+                (dir) => CacheQuotaManager.instance.touch(
+                  '${dir.path}${Platform.pathSeparator}${thumbnailFileName(key)}',
+                ),
+              )
+              .catchError((Object _) {}),
+        );
+      }
+      return Future.value(memo);
+    }
     final pending = _inFlight[key];
     if (pending != null) return pending;
     // NOTE: block body, not arrow — `() => _inFlight.remove(key)` would
@@ -110,21 +130,28 @@ class ThumbnailStore {
   static Future<Uint8List?> _load(String key, VideoItem video) async {
     try {
       final dir = await _cacheDir();
-      final file =
-          File('${dir.path}${Platform.pathSeparator}${thumbnailFileName(key)}');
+      final file = File(
+        '${dir.path}${Platform.pathSeparator}${thumbnailFileName(key)}',
+      );
       if (file.existsSync()) {
         final bytes = await file.readAsBytes();
+        if (_cacheDirOverride == null) {
+          await CacheQuotaManager.instance.touch(file.path);
+        }
         _memory[key] = bytes.isEmpty ? null : bytes;
         return _memory[key];
       }
       // Timeout guard: a wedged channel must never stall card builds (and
       // keeps pure unit tests deterministic without an engine).
-      final bytes =
-          await _fetch(video).timeout(const Duration(seconds: 10));
+      final bytes = await _fetch(video).timeout(const Duration(seconds: 10));
       _memory[key] = bytes;
       if (bytes != null) {
         try {
-          await file.writeAsBytes(bytes, flush: true);
+          if (_cacheDirOverride != null) {
+            await file.writeAsBytes(bytes, flush: true);
+          } else {
+            await CacheQuotaManager.instance.write(file, bytes);
+          }
         } catch (_) {}
       }
       return bytes;
