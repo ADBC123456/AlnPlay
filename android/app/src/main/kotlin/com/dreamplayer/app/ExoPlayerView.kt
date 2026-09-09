@@ -391,13 +391,33 @@ class ExoPlayerView(
     /// for 4K REMUX. The byte budget scales down on small-heap devices
     /// ([BufferTuning]) — a fixed 96MB target OOMs the Fire TV Stick's 192MB
     /// app heap mid-playback ("io unspecified" source error).
+    // Publish one coherent sample from the playback thread to the UI thread.
+    @Volatile private var loadGateProgress: Double? = null
+
     private val loadControl: LoadControl = run {
         BufferTuning.tune(activity)
-        DefaultLoadControl.Builder()
+        val delegate = DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, 50_000, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS)
             .setTargetBufferBytes(BufferTuning.media3TargetBytes)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
+        object : LoadControl by delegate {
+            override fun shouldStartPlayback(parameters: LoadControl.Parameters): Boolean {
+                val shouldStart = delegate.shouldStartPlayback(parameters)
+                val configuredUs = (if (parameters.rebuffering)
+                    BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS else BUFFER_FOR_PLAYBACK_MS) * 1000.0
+                val targetUs = if (parameters.targetLiveOffsetUs == C.TIME_UNSET)
+                    configuredUs else minOf(configuredUs, parameters.targetLiveOffsetUs / 2.0)
+                val speed = parameters.playbackSpeed.toDouble()
+                loadGateProgress = when {
+                    shouldStart -> 1.0
+                    !speed.isFinite() || speed <= 0.0 || parameters.bufferedDurationUs < 0 -> null
+                    targetUs <= 0.0 -> null
+                    else -> (parameters.bufferedDurationUs / speed / targetUs).coerceIn(0.0, 1.0)
+                }
+                return shouldStart
+            }
+        }
     }
 
     /// Tracks the decoder mode the current player was created with so
@@ -499,6 +519,7 @@ class ExoPlayerView(
     private val listener = object : Player.Listener {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_BUFFERING) loadGateProgress = null
             emit()
             if (playbackState == Player.STATE_READY) matchRefreshRate()
         }
@@ -1029,6 +1050,7 @@ class ExoPlayerView(
             when (call.method) {
                 "open" -> {
                     try {
+                        loadGateProgress = null
                         registerSpatialListenerOnce()
                         // Recreate the player when the decoder mode changed so
                         // renderers are rebuilt with the new MediaCodecSelector
@@ -1788,6 +1810,7 @@ class ExoPlayerView(
         map["durationMs"] = if (player.duration == C.TIME_UNSET) 0L else player.duration
         map["bufferedMs"] = player.bufferedPosition
         map["buffering"] = state == Player.STATE_BUFFERING
+        map["bufferingProgress"] = bufferingProgress()
         map["ended"] = state == Player.STATE_ENDED
         map["videoCodecs"] = videoFormat?.codecs
         map["videoMime"] = videoFormat?.sampleMimeType
@@ -1844,6 +1867,14 @@ class ExoPlayerView(
 
     private var lastFullState: Map<String, Any?>? = null
 
+    /// UI-only progress based on the exact LoadControl Parameters observed by
+    /// the delegating LoadControl. It is media-time buffered ahead, not a
+    /// whole-file download percentage. Unknown states deliberately return null.
+    private fun bufferingProgress(): Double? {
+        if (player.playbackState != Player.STATE_BUFFERING) return null
+        return loadGateProgress
+    }
+
     private fun emit(
         errorCodeName: String? = null,
         errorMessage: String? = null,
@@ -1870,6 +1901,7 @@ class ExoPlayerView(
                 put("state", player.playbackState)
                 put("playing", player.isPlaying)
                 put("buffering", player.playbackState == Player.STATE_BUFFERING)
+                put("bufferingProgress", bufferingProgress())
                 put("ended", player.playbackState == Player.STATE_ENDED)
                 put("error", null)
                 put("errorMessage", null)

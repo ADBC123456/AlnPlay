@@ -90,6 +90,127 @@ void main() {
   });
 
   testWidgets(
+    'compact buffering shows only real progress and no detail panel',
+    (tester) async {
+      await tester.pumpWidget(
+        host(
+          const PlayerLoadingOverlay(
+            videoLoading: true,
+            preparingVideo: false,
+            bufferedAhead: Duration(seconds: 8),
+            compact: true,
+            bufferingProgress: .42,
+          ),
+        ),
+      );
+
+      expect(find.text('42%'), findsOneWidget);
+      expect(find.text('—'), findsOneWidget);
+      expect(find.text('Buffering video…'), findsNothing);
+      expect(find.text('8.0 s buffered ahead'), findsNothing);
+      expect(find.byType(DecoratedBox), findsNothing);
+      final ring = tester.widget<CircularProgressIndicator>(
+        find.byType(CircularProgressIndicator),
+      );
+      expect(ring.value, .42);
+      expect(
+        tester.getSize(find.byType(CircularProgressIndicator)),
+        const Size(44, 44),
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('compact unknown ratio is indeterminate and never says zero', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        const PlayerLoadingOverlay(
+          videoLoading: true,
+          preparingVideo: false,
+          bufferedAhead: Duration.zero,
+          compact: true,
+        ),
+      ),
+    );
+
+    expect(find.text('—'), findsNWidgets(2));
+    expect(find.text('0%'), findsNothing);
+    expect(
+      tester
+          .widget<CircularProgressIndicator>(
+            find.byType(CircularProgressIndicator),
+          )
+          .value,
+      isNull,
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('compact rate is measured without an app-download label', (
+    tester,
+  ) async {
+    var bytes = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async => bytes);
+    await tester.pumpWidget(
+      host(
+        const PlayerLoadingOverlay(
+          videoLoading: true,
+          preparingVideo: false,
+          bufferedAhead: Duration.zero,
+          compact: true,
+        ),
+      ),
+    );
+    await tester.pump();
+    bytes = (3.5 * 1024 * 1024).round();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Text &&
+            (widget.data?.endsWith('MiB/s') == true ||
+                widget.data?.endsWith('KiB/s') == true),
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('App download'), findsNothing);
+    expect(find.textContaining('本应用接收'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('compact respects reduced motion for unknown progress', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        const MediaQuery(
+          data: MediaQueryData(disableAnimations: true),
+          child: PlayerLoadingOverlay(
+            videoLoading: true,
+            preparingVideo: false,
+            bufferedAhead: Duration.zero,
+            compact: true,
+          ),
+        ),
+      ),
+    );
+    expect(
+      tester
+          .widget<CircularProgressIndicator>(
+            find.byType(CircularProgressIndicator),
+          )
+          .value,
+      .25,
+    );
+    expect(find.text('—'), findsNWidgets(2));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
     'comment-only loading stays above video and does not intercept taps',
     (tester) async {
       var taps = 0;
@@ -154,5 +275,9 @@ void main() {
     expect(PlayerLoadingOverlay.formatRate(1048576), '1.00 MiB/s');
     expect(PlayerLoadingOverlay.formatRate(double.nan), '—');
     expect(PlayerLoadingOverlay.formatRate(-1), '—');
+    expect(
+      PlayerLoadingOverlay.formatCompactRate(3.5 * 1024 * 1024),
+      '3.5 MiB/s',
+    );
   });
 }

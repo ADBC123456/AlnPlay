@@ -244,21 +244,17 @@ class ExoSubtitleTrack {
 /// A container chapter (MKV `Chapters`), parsed natively on open.
 @immutable
 class ExoChapter {
-  const ExoChapter({
-    required this.title,
-    required this.startMs,
-    this.endMs,
-  });
+  const ExoChapter({required this.title, required this.startMs, this.endMs});
 
   final String title;
   final int startMs;
   final int? endMs;
 
   static ExoChapter fromMap(Map<dynamic, dynamic> m) => ExoChapter(
-        title: m['title'] as String? ?? 'Chapter',
-        startMs: m['startMs'] is num ? (m['startMs'] as num).toInt() : 0,
-        endMs: m['endMs'] is num ? (m['endMs'] as num).toInt() : null,
-      );
+    title: m['title'] as String? ?? 'Chapter',
+    startMs: m['startMs'] is num ? (m['startMs'] as num).toInt() : 0,
+    endMs: m['endMs'] is num ? (m['endMs'] as num).toInt() : null,
+  );
 }
 
 class ExoPlayerEvent {
@@ -270,6 +266,7 @@ class ExoPlayerEvent {
     required this.positionMs,
     required this.durationMs,
     this.bufferedMs = 0,
+    this.bufferingProgress,
     this.videoCodecs,
     this.videoMime,
     this.videoWidth = 0,
@@ -309,6 +306,7 @@ class ExoPlayerEvent {
   final int positionMs;
   final int durationMs;
   final int bufferedMs;
+  final double? bufferingProgress;
   final String? videoCodecs;
   final String? videoMime;
   final int videoWidth;
@@ -404,6 +402,11 @@ class ExoPlayerEvent {
       positionMs: asInt(m['positionMs']),
       durationMs: asInt(m['durationMs']),
       bufferedMs: asInt(m['bufferedMs']),
+      bufferingProgress:
+          m['bufferingProgress'] is num &&
+              (m['bufferingProgress'] as num).isFinite
+          ? (m['bufferingProgress'] as num).toDouble().clamp(0.0, 1.0)
+          : null,
       videoCodecs: m['videoCodecs'] as String?,
       videoMime: m['videoMime'] as String?,
       videoWidth: asInt(m['videoWidth']),
@@ -432,7 +435,9 @@ class ExoPlayerEvent {
       errorCause: m['errorCause'] as String?,
       audioPassthrough: m['audioPassthrough'] == true,
       spatialAudio: m['spatialAudio'] as String? ?? '',
-      audioBoost: m['audioBoost'] is num ? (m['audioBoost'] as num).toDouble().clamp(1.0, 3.0) : 1.0,
+      audioBoost: m['audioBoost'] is num
+          ? (m['audioBoost'] as num).toDouble().clamp(1.0, 3.0)
+          : 1.0,
       nightMode: m['nightMode'] == true,
       bassBoost: asInt(m['bassBoost'], 0),
       chapters: (m['chapters'] as List? ?? const [])
@@ -604,8 +609,7 @@ class ExoPlayerController implements PlaybackController {
     if (resumeKey != null && resumeKey.isNotEmpty) 'resumeKey': resumeKey,
     if (title != null && title.isNotEmpty) 'title': title,
     if (externalSubtitles != null && externalSubtitles.isNotEmpty)
-      'externalSubtitles':
-          externalSubtitles.map((s) => s.toJson()).toList(),
+      'externalSubtitles': externalSubtitles.map((s) => s.toJson()).toList(),
     if (decoderMode != null && decoderMode.isNotEmpty)
       'decoderMode': decoderMode,
     if (readingLanguage != null && readingLanguage.isNotEmpty)
