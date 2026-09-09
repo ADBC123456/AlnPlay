@@ -132,7 +132,12 @@ class _LiquidGlassDockState extends State<LiquidGlassDock>
       _captureQueued = false;
       if (!mounted) return;
       final object = _atlasKey.currentContext?.findRenderObject();
-      if (object is! RenderRepaintBoundary || object.debugNeedsPaint) {
+      // `debugNeedsPaint` is initialized inside an assert in Flutter's
+      // RenderObject implementation. Reading it in a release build throws a
+      // LateInitializationError, including on iOS. A post-frame callback is
+      // already after paint; if the boundary still cannot be captured,
+      // `toImage` fails into the safe fallback below.
+      if (object is! RenderRepaintBoundary) {
         _queueCapture();
         return;
       }
