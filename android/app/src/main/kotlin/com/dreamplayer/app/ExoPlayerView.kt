@@ -23,6 +23,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
@@ -35,9 +36,14 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
+import androidx.media3.exoplayer.analytics.PlayerId
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.TrackGroupArray
+import androidx.media3.exoplayer.trackselection.ExoTrackSelection
+import androidx.media3.exoplayer.upstream.Allocator
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
@@ -401,7 +407,47 @@ class ExoPlayerView(
             .setTargetBufferBytes(BufferTuning.media3TargetBytes)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
-        object : LoadControl by delegate {
+        // Media3's modern LoadControl methods are Java default methods. Kotlin
+        // interface delegation does not forward those defaults and therefore
+        // falls into Media3's legacy "not implemented" stubs at runtime. Keep
+        // every modern callback explicit so the wrapper is behavior-neutral.
+        object : LoadControl {
+            override fun onPrepared(playerId: PlayerId) = delegate.onPrepared(playerId)
+
+            override fun onTracksSelected(
+                parameters: LoadControl.Parameters,
+                trackGroups: TrackGroupArray,
+                trackSelections: Array<out ExoTrackSelection?>,
+            ) = delegate.onTracksSelected(parameters, trackGroups, trackSelections)
+
+            override fun onStopped(playerId: PlayerId) = delegate.onStopped(playerId)
+
+            override fun onReleased(playerId: PlayerId) = delegate.onReleased(playerId)
+
+            override fun getAllocator(playerId: PlayerId): Allocator =
+                delegate.getAllocator(playerId)
+
+            override fun getBackBufferDurationUs(playerId: PlayerId): Long =
+                delegate.getBackBufferDurationUs(playerId)
+
+            override fun retainBackBufferFromKeyframe(playerId: PlayerId): Boolean =
+                delegate.retainBackBufferFromKeyframe(playerId)
+
+            override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean =
+                delegate.shouldContinueLoading(parameters)
+
+            override fun shouldContinuePreloading(
+                playerId: PlayerId,
+                timeline: Timeline,
+                mediaPeriodId: MediaSource.MediaPeriodId,
+                bufferedDurationUs: Long,
+            ): Boolean = delegate.shouldContinuePreloading(
+                playerId,
+                timeline,
+                mediaPeriodId,
+                bufferedDurationUs,
+            )
+
             override fun shouldStartPlayback(parameters: LoadControl.Parameters): Boolean {
                 val shouldStart = delegate.shouldStartPlayback(parameters)
                 val configuredUs = (if (parameters.rebuffering)
