@@ -9,6 +9,8 @@ import android.graphics.drawable.ColorDrawable
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
+import android.net.TrafficStats
+import android.os.Process
 import android.provider.OpenableColumns
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
@@ -118,6 +120,17 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "version" -> result.success(packageManager.getPackageInfo(packageName, 0).versionName)
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dreamplayer/network_speed")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "rxBytes" -> {
+                        val bytes = TrafficStats.getUidRxBytes(Process.myUid())
+                        result.success(if (bytes == TrafficStats.UNSUPPORTED.toLong()) null else bytes)
+                    }
                     else -> result.notImplemented()
                 }
             }

@@ -35,6 +35,7 @@ class _ControlsHarness {
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () => record('video'),
+                  onDoubleTap: () => record('videoDouble'),
                   child: const ColoredBox(color: Colors.black),
                 ),
               ),
@@ -142,10 +143,39 @@ void main() {
       );
       await tester.tap(button);
       await tester.tapAt(const Offset(400, 180));
+      await tester.pump(const Duration(milliseconds: 400));
     }
     expect(harness.calls['play'], 2);
     expect(harness.calls['video'], 2);
   });
+
+  for (final visible in [true, false]) {
+    testWidgets(
+      'center double tap passes through ${visible ? 'visible' : 'hidden'} chrome in small landscape',
+      (tester) async {
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await harness.mount(
+          tester,
+          size: const Size(800, 360),
+          textScale: 2,
+          visible: visible,
+        );
+
+        await tester.tapAt(const Offset(400, 180));
+        await tester.pump(const Duration(milliseconds: 40));
+        await tester.tapAt(const Offset(400, 180));
+        await tester.pumpAndSettle();
+
+        expect(harness.calls['videoDouble'], 1);
+        expect(tester.takeException(), isNull);
+        if (visible) {
+          await tester.tap(find.byTooltip('Play'));
+          expect(harness.calls['play'], 1);
+        }
+      },
+    );
+  }
 
   testWidgets(
     'hidden controls pass video taps through their former positions',
@@ -162,6 +192,7 @@ void main() {
       await harness.mount(tester, visible: false);
       for (final position in positions) {
         await tester.tapAt(position);
+        await tester.pump(const Duration(milliseconds: 400));
       }
       expect(harness.calls, {'video': 4});
       expect(find.byTooltip('Play').hitTestable(), findsNothing);

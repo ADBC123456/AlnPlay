@@ -25,6 +25,32 @@ String hashIdentity(String input) {
   return hash.toRadixString(16).padLeft(16, '0');
 }
 
+enum DanmakuLoadPhase { matching, downloading, parsing }
+
+typedef DanmakuProgressCallback = void Function(DanmakuLoadProgress progress);
+
+class DanmakuLoadProgress {
+  const DanmakuLoadProgress({
+    required this.phase,
+    this.sourceId,
+    this.bytesReceived,
+    this.totalBytes,
+    this.bytesPerSecond,
+  });
+
+  final DanmakuLoadPhase phase;
+  final String? sourceId;
+  final int? bytesReceived;
+  final int? totalBytes;
+  final double? bytesPerSecond;
+
+  /// Null when the server omitted Content-Length.
+  double? get fraction =>
+      bytesReceived != null && totalBytes != null && totalBytes! > 0
+      ? (bytesReceived! / totalBytes!).clamp(0, 1)
+      : null;
+}
+
 /// Cooperative cancellation handle for source requests.
 ///
 /// Sources poll [isCancelled] between steps and abort in-flight HTTP
@@ -302,6 +328,15 @@ abstract interface class DanmakuSource {
   Future<List<DanmakuSourceComment>> fetchSegmentComments({
     required DanmakuSegment segment,
     DanmakuCancelToken? cancelToken,
+  });
+}
+
+/// Optional source capability for byte-accurate comment download progress.
+abstract interface class ProgressiveDanmakuSource {
+  Future<DanmakuSourceComments> fetchCommentsWithProgress({
+    required String episodeId,
+    DanmakuCancelToken? cancelToken,
+    DanmakuProgressCallback? onProgress,
   });
 }
 

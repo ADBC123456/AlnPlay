@@ -44,6 +44,17 @@ class MediaTitle {
   final int? year;
   final String? releaseDate;
   final List<String> genres;
+
+  /// True only when a metadata provider explicitly classifies the title as
+  /// animation. Deliberately does not infer from file, folder, or title text.
+  bool get isAnimation => genres.any((genre) {
+    final normalized = genre.trim().toLowerCase();
+    return normalized == 'animation' ||
+        normalized == 'anime' ||
+        normalized == '动画' ||
+        normalized == '動畫' ||
+        normalized == 'アニメーション';
+  });
   final String? poster;
   final String? backdrop;
   final String overview;

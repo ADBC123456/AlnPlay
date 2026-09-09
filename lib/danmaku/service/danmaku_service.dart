@@ -93,6 +93,7 @@ class DanmakuService {
 
   /// Per-video in-flight loads, deduped by stable identity key.
   final Map<String, Future<DanmakuLoadOutcome>> _inFlight = {};
+  final Map<String, Set<DanmakuProgressCallback>> _progressListeners = {};
 
   /// Idempotent; concurrent callers share one init future.
   Future<void> init() {
@@ -157,6 +158,7 @@ class DanmakuService {
     }
     configs = replacement;
     _inFlight.clear();
+    _progressListeners.clear();
     _registerAll();
     await DanmakuSourceStore.save(configs);
   }
@@ -171,6 +173,7 @@ class DanmakuService {
   Future<void> clearCache() async {
     await init();
     _inFlight.clear();
+    _progressListeners.clear();
     await Future.wait([
       cache.clearAll(),
       scrape_store.ScrapeStore.clearAllTasks(),
@@ -197,6 +200,7 @@ class DanmakuService {
     vid.VideoIdentity identity, {
     VideoMetadataContext? metadata,
     bool forceRefresh = false,
+    DanmakuProgressCallback? onProgress,
   }) {
     if (!_initialized) {
       return init().then(
@@ -204,6 +208,7 @@ class DanmakuService {
           identity,
           metadata: metadata,
           forceRefresh: forceRefresh,
+          onProgress: onProgress,
         ),
       );
     }
@@ -212,12 +217,35 @@ class DanmakuService {
         : '${identity.stableKey}|${metadata.titleId}|${metadata.revision}';
     if (!forceRefresh) {
       final running = _inFlight[key];
-      if (running != null) return running;
+      if (running != null) {
+        if (onProgress != null) {
+          (_progressListeners[key] ??= {}).add(onProgress);
+        }
+        return running;
+      }
     } else {
       _inFlight.remove(key);
+      _progressListeners.remove(key);
     }
-    final future = _load(identity, metadata).whenComplete(() {
-      _inFlight.remove(key);
+    final listeners = <DanmakuProgressCallback>{?onProgress};
+    _progressListeners[key] = listeners;
+    void report(DanmakuLoadProgress progress) {
+      // Capture this operation's listener set. A force-refresh can replace the
+      // same key while this request is still finishing; looking the key up
+      // again would leak old progress into the new request's UI.
+      for (final listener in List<DanmakuProgressCallback>.of(listeners)) {
+        try {
+          listener(progress);
+        } catch (_) {}
+      }
+    }
+
+    late final Future<DanmakuLoadOutcome> future;
+    future = _load(identity, metadata, report).whenComplete(() {
+      if (identical(_inFlight[key], future)) {
+        _inFlight.remove(key);
+        _progressListeners.remove(key);
+      }
     });
     _inFlight[key] = future;
     return future;
@@ -226,6 +254,7 @@ class DanmakuService {
   Future<DanmakuLoadOutcome> _load(
     vid.VideoIdentity identity,
     VideoMetadataContext? metadata,
+    DanmakuProgressCallback onProgress,
   ) async {
     if (!enabled) {
       return const DanmakuLoadOutcome._(status: DanmakuStatus.idle);
@@ -244,6 +273,12 @@ class DanmakuService {
     // explicit choice on another source.
     var foundBinding = false;
     for (final source in sources) {
+      onProgress(
+        DanmakuLoadProgress(
+          phase: DanmakuLoadPhase.matching,
+          sourceId: source.id,
+        ),
+      );
       final binding = await DanmakuBindingStore.load(
         sourceId: source.id,
         sourceBaseUrl: source.baseUrl,
@@ -272,6 +307,7 @@ class DanmakuService {
         ),
         episodeId: binding.ref.episodeId,
         shiftSeconds: binding.ref.shift,
+        onProgress: onProgress,
       );
       switch (result.status) {
         case DanmakuFetchStatus.fromCache:
@@ -302,9 +338,15 @@ class DanmakuService {
           fileSize: identity.fileSize,
           videoKey: identity.stableKey,
         ),
+        onProgress: onProgress,
       );
       if (result.status == DanmakuFetchStatus.noMatch && metadata != null) {
-        final scraped = await _loadFromMetadata(source, identity, metadata);
+        final scraped = await _loadFromMetadata(
+          source,
+          identity,
+          metadata,
+          onProgress,
+        );
         if (scraped != null) return scraped;
       }
       switch (result.status) {
@@ -334,6 +376,7 @@ class DanmakuService {
     DanmakuSourceConfig source,
     vid.VideoIdentity identity,
     VideoMetadataContext metadata,
+    DanmakuProgressCallback onProgress,
   ) async {
     final episodeNumber = metadata.episodeNumber;
     if (episodeNumber == null || episodeNumber <= 0) return null;
@@ -345,6 +388,12 @@ class DanmakuService {
         metadata.originalTitle!,
     ];
     for (final title in titles) {
+      onProgress(
+        DanmakuLoadProgress(
+          phase: DanmakuLoadPhase.matching,
+          sourceId: source.id,
+        ),
+      );
       final List<scrape.DanmakuCatalogAnime> catalog;
       try {
         catalog = await scrapeSourceFor(source).searchEpisodes(title);
@@ -377,6 +426,7 @@ class DanmakuService {
             videoKey: identity.stableKey,
           ),
           episodeId: candidates.single.episodeId,
+          onProgress: onProgress,
         );
         return _outcomeFrom(result);
       } on Exception {

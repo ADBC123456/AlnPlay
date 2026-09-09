@@ -82,5 +82,16 @@ import Network
           result(FlutterMethodNotImplemented)
         }
       }
+
+    // iOS exposes no reliable per-process receive-byte counter. Return nil
+    // rather than using whole-device counters or inventing a stream rate.
+    FlutterMethodChannel(name: "dreamplayer/network_speed", binaryMessenger: messenger)
+      .setMethodCallHandler { call, result in
+        if call.method == "rxBytes" {
+          result(nil)
+        } else {
+          result(FlutterMethodNotImplemented)
+        }
+      }
   }
 }

@@ -114,7 +114,7 @@ class DanmuApiConfig {
 }
 
 /// danmu_api implementation of [DanmakuSource].
-class DanmuApiSource implements DanmakuSource {
+class DanmuApiSource implements DanmakuSource, ProgressiveDanmakuSource {
   DanmuApiSource(this._config, {DanmuApiRetryPolicy? retryPolicy})
     : retryPolicy = retryPolicy ?? const DanmuApiRetryPolicy() {
     _normalizedBaseUrl = DanmuApiConfig.normalizedBaseUrl(_config.baseUrl);
@@ -263,6 +263,14 @@ class DanmuApiSource implements DanmakuSource {
   Future<DanmakuSourceComments> fetchComments({
     required String episodeId,
     DanmakuCancelToken? cancelToken,
+  }) =>
+      fetchCommentsWithProgress(episodeId: episodeId, cancelToken: cancelToken);
+
+  @override
+  Future<DanmakuSourceComments> fetchCommentsWithProgress({
+    required String episodeId,
+    DanmakuCancelToken? cancelToken,
+    DanmakuProgressCallback? onProgress,
   }) async {
     final id = Uri.encodeComponent(episodeId);
     final decoded = await _send(
@@ -270,6 +278,7 @@ class DanmuApiSource implements DanmakuSource {
       path: '/comment/$id',
       query: const {'format': 'json', 'duration': 'true'},
       cancelToken: cancelToken,
+      onDownloadProgress: onProgress,
     );
     // Real danmu_api deployments commonly return the comment payload without
     // the `{success: true}` envelope used by match/search. Treat an explicit
@@ -448,6 +457,7 @@ class DanmuApiSource implements DanmakuSource {
     Map<String, String>? query,
     Map<String, dynamic>? jsonBody,
     DanmakuCancelToken? cancelToken,
+    DanmakuProgressCallback? onDownloadProgress,
   }) async {
     // Only the request shape is logged — never the URL (the path prefix can
     // carry the token) and never headers/body.
@@ -464,6 +474,7 @@ class DanmuApiSource implements DanmakuSource {
           query: query,
           jsonBody: jsonBody,
           cancelToken: cancelToken,
+          onDownloadProgress: onDownloadProgress,
         );
       } on DanmakuCancelledException {
         rethrow;
@@ -496,6 +507,7 @@ class DanmuApiSource implements DanmakuSource {
     Map<String, String>? query,
     Map<String, dynamic>? jsonBody,
     DanmakuCancelToken? cancelToken,
+    DanmakuProgressCallback? onDownloadProgress,
   }) async {
     _throwIfCancelled(cancelToken);
     final uri = _buildUri(path, query);
@@ -522,14 +534,46 @@ class DanmuApiSource implements DanmakuSource {
         cancelToken,
         onCancel: abortRequest,
       );
+      final totalBytes =
+          response.compressionState !=
+                  HttpClientResponseCompressionState.decompressed &&
+              response.contentLength >= 0
+          ? response.contentLength
+          : null;
+      final stopwatch = Stopwatch()..start();
+      var received = 0;
+      _reportProgress(
+        onDownloadProgress,
+        DanmakuLoadProgress(
+          phase: DanmakuLoadPhase.downloading,
+          sourceId: sourceId,
+          bytesReceived: 0,
+          totalBytes: totalBytes,
+          bytesPerSecond: 0,
+        ),
+      );
       final bytes = await _awaitWithCancellation(
         response
-            .fold<List<int>>(<int>[], (buffer, chunk) => buffer..addAll(chunk))
+            .fold<List<int>>(<int>[], (buffer, chunk) {
+              buffer.addAll(chunk);
+              received += chunk.length;
+              final seconds = stopwatch.elapsedMicroseconds / 1000000;
+              _reportProgress(
+                onDownloadProgress,
+                DanmakuLoadProgress(
+                  phase: DanmakuLoadPhase.downloading,
+                  sourceId: sourceId,
+                  bytesReceived: received,
+                  totalBytes: totalBytes,
+                  bytesPerSecond: seconds > 0 ? received / seconds : null,
+                ),
+              );
+              return buffer;
+            })
             .timeout(kDanmuApiDefaultTimeout),
         cancelToken,
         onCancel: abortRequest,
       );
-      final text = utf8.decode(bytes, allowMalformed: true);
       final status = response.statusCode;
       switch (status) {
         case 429:
@@ -549,6 +593,19 @@ class DanmuApiSource implements DanmakuSource {
       if (status >= 400) {
         throw DanmakuRequestException('danmu_api request error ($status)');
       }
+      _reportProgress(
+        onDownloadProgress,
+        DanmakuLoadProgress(
+          phase: DanmakuLoadPhase.parsing,
+          sourceId: sourceId,
+          bytesReceived: received,
+          totalBytes: totalBytes,
+          bytesPerSecond: stopwatch.elapsedMicroseconds > 0
+              ? received / (stopwatch.elapsedMicroseconds / 1000000)
+              : null,
+        ),
+      );
+      final text = utf8.decode(bytes, allowMalformed: true);
       Map<String, dynamic> decoded;
       try {
         final value = jsonDecode(text);
@@ -614,5 +671,15 @@ class DanmuApiSource implements DanmakuSource {
       print('[DanmuApiSource] $message');
       return true;
     }());
+  }
+
+  static void _reportProgress(
+    DanmakuProgressCallback? callback,
+    DanmakuLoadProgress progress,
+  ) {
+    if (callback == null) return;
+    try {
+      callback(progress);
+    } catch (_) {}
   }
 }

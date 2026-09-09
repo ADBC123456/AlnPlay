@@ -1,7 +1,8 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
-/// Responds to the first tap immediately. A nearby second tap seeks without
+/// Responds to the first tap immediately. A nearby second tap seeks or toggles
+/// playback in the center without
 /// making every single tap wait for DoubleTapGestureRecognizer's timeout.
 class PlayerGestureSurface extends StatefulWidget {
   const PlayerGestureSurface({
@@ -23,7 +24,7 @@ class PlayerGestureSurface extends StatefulWidget {
   final GestureScaleUpdateCallback onScaleUpdate;
   final GestureScaleEndCallback onScaleEnd;
 
-  /// Only the outer quarters seek; the middle half is reserved for chrome.
+  /// Only the outer quarters seek; the middle half toggles playback.
   static int seekDirection(double x, double width) {
     if (width <= 0 || x < 0 || x > width) return 0;
     if (x < width * .25) return -1;
@@ -55,11 +56,7 @@ class _PlayerGestureSurfaceState extends State<PlayerGestureSurface> {
         (details.localPosition - _lastTapPosition!).distance <= kDoubleTapSlop;
     if (isDouble) {
       _clearTap();
-      final width = context.size?.width ?? 0;
-      if (PlayerGestureSurface.seekDirection(details.localPosition.dx, width) !=
-          0) {
-        widget.onDoubleTap(details.localPosition);
-      }
+      widget.onDoubleTap(details.localPosition);
     } else {
       _lastTapTime = _pointerTime;
       _lastTapPosition = details.localPosition;

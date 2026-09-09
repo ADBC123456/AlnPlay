@@ -164,6 +164,98 @@ void main() {
     expect(result.comments.single.content, '正常弹幕');
   });
 
+  test(
+    'reports downloaded bytes, speed, and parsing with known length',
+    () async {
+      final body = utf8.encode(
+        jsonEncode({
+          'videoDuration': 10,
+          'comments': [
+            {'p': '1,1,16777215,source', 'm': 'hello'},
+          ],
+        }),
+      );
+      final server = await startServer((request) async {
+        request.response
+          ..headers.contentType = ContentType.json
+          ..contentLength = body.length
+          ..add(body);
+        await request.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      final source = DanmuApiSource(DanmuApiConfig(baseUrl: baseUrl(server)));
+      final progress = <DanmakuLoadProgress>[];
+
+      await source.fetchCommentsWithProgress(
+        episodeId: 'episode',
+        onProgress: progress.add,
+      );
+
+      final downloads = progress
+          .where((item) => item.phase == DanmakuLoadPhase.downloading)
+          .toList();
+      expect(downloads.last.bytesReceived, body.length);
+      expect(downloads.last.totalBytes, body.length);
+      expect(downloads.last.fraction, 1);
+      expect(downloads.last.bytesPerSecond, greaterThan(0));
+      expect(progress.last.phase, DanmakuLoadPhase.parsing);
+    },
+  );
+
+  test('unknown content length never reports a percentage', () async {
+    final server = await startServer((request) async {
+      request.response
+        ..headers.contentType = ContentType.json
+        ..write(jsonEncode({'comments': <Object>[]}));
+      await request.response.close();
+    });
+    addTearDown(() => server.close(force: true));
+    final source = DanmuApiSource(DanmuApiConfig(baseUrl: baseUrl(server)));
+    final progress = <DanmakuLoadProgress>[];
+
+    await source.fetchCommentsWithProgress(
+      episodeId: 'episode',
+      onProgress: progress.add,
+    );
+
+    final downloads = progress.where(
+      (item) => item.phase == DanmakuLoadPhase.downloading,
+    );
+    expect(downloads, isNotEmpty);
+    expect(downloads.every((item) => item.fraction == null), isTrue);
+  });
+
+  test(
+    'auto-decompressed responses do not use compressed length as total',
+    () async {
+      final plain = utf8.encode(jsonEncode({'comments': <Object>[]}));
+      final compressed = gzip.encode(plain);
+      final server = await startServer((request) async {
+        request.response
+          ..headers.contentType = ContentType.json
+          ..headers.set(HttpHeaders.contentEncodingHeader, 'gzip')
+          ..contentLength = compressed.length
+          ..add(compressed);
+        await request.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      final source = DanmuApiSource(DanmuApiConfig(baseUrl: baseUrl(server)));
+      final progress = <DanmakuLoadProgress>[];
+
+      await source.fetchCommentsWithProgress(
+        episodeId: 'episode',
+        onProgress: progress.add,
+      );
+
+      final downloads = progress.where(
+        (item) => item.phase == DanmakuLoadPhase.downloading,
+      );
+      expect(downloads, isNotEmpty);
+      expect(downloads.every((item) => item.totalBytes == null), isTrue);
+      expect(downloads.every((item) => item.fraction == null), isTrue);
+    },
+  );
+
   test('rejects a comment payload without a comments list', () async {
     final server = await startServer((request) async {
       await jsonResponse(request, {'count': 10});

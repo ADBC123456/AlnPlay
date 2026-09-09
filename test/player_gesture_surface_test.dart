@@ -47,7 +47,7 @@ void main() {
   });
 
   for (final x in [100.0, 199.0, 200.0, 400.0, 600.0, 601.0, 700.0]) {
-    testWidgets('double tap at x=$x respects quarter-screen seek zones', (
+    testWidgets('double tap at x=$x reaches playback/seek handler', (
       tester,
     ) async {
       await mount(tester);
@@ -65,9 +65,8 @@ void main() {
         1,
         reason: 'The first tap must reveal controls immediately.',
       );
-      final shouldSeek = x < 200 || x > 600;
-      expect(seeks, shouldSeek ? 1 : 0);
-      expect(seekPositions, shouldSeek ? [Offset(x, 100)] : isEmpty);
+      expect(seeks, 1);
+      expect(seekPositions, [Offset(x, 100)]);
     });
   }
 

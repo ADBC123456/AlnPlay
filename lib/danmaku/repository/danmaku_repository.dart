@@ -88,6 +88,7 @@ class DanmakuRepository {
     String? matchMode,
     DanmakuCancelToken? cancelToken,
     bool forceRefresh = false,
+    DanmakuProgressCallback? onProgress,
   }) async {
     if (!forceRefresh) {
       final cached = await cache.read(
@@ -96,6 +97,13 @@ class DanmakuRepository {
         videoIdentity: request.videoIdentity,
       );
       if (cached != null) {
+        _report(
+          onProgress,
+          DanmakuLoadProgress(
+            phase: DanmakuLoadPhase.parsing,
+            sourceId: sourceId,
+          ),
+        );
         return DanmakuFetchResult._(
           status: cached.comments.isEmpty
               ? DanmakuFetchStatus.empty
@@ -114,6 +122,13 @@ class DanmakuRepository {
     }
 
     try {
+      _report(
+        onProgress,
+        DanmakuLoadProgress(
+          phase: DanmakuLoadPhase.matching,
+          sourceId: sourceId,
+        ),
+      );
       final match = await source.match(
         fileName: request.fileName,
         fileHash: request.fileHash,
@@ -125,9 +140,12 @@ class DanmakuRepository {
         return const DanmakuFetchResult._(status: DanmakuFetchStatus.noMatch);
       }
 
-      final comments = await source.fetchComments(
+      final comments = await _fetchComments(
+        source,
+        sourceId: sourceId,
         episodeId: match.episodeId,
         cancelToken: cancelToken,
+        onProgress: onProgress,
       );
 
       final shiftedComments = _shiftComments(comments.comments, match.shift);
@@ -168,6 +186,7 @@ class DanmakuRepository {
     num shiftSeconds = 0,
     DanmakuCancelToken? cancelToken,
     bool forceRefresh = false,
+    DanmakuProgressCallback? onProgress,
   }) async {
     if (!forceRefresh) {
       final cached = await cache.read(
@@ -176,6 +195,13 @@ class DanmakuRepository {
         videoIdentity: request.videoIdentity,
       );
       if (cached != null && cached.episodeId == episodeId) {
+        _report(
+          onProgress,
+          DanmakuLoadProgress(
+            phase: DanmakuLoadPhase.parsing,
+            sourceId: sourceId,
+          ),
+        );
         return DanmakuFetchResult._(
           status: cached.comments.isEmpty
               ? DanmakuFetchStatus.empty
@@ -194,9 +220,12 @@ class DanmakuRepository {
     }
 
     try {
-      final comments = await source.fetchComments(
+      final comments = await _fetchComments(
+        source,
+        sourceId: sourceId,
         episodeId: episodeId,
         cancelToken: cancelToken,
+        onProgress: onProgress,
       );
       final entry = DanmakuCacheEntry(
         sourceId: sourceId,
@@ -242,5 +271,47 @@ class DanmakuRepository {
             likes: comment.likes,
           ),
     ];
+  }
+
+  Future<DanmakuSourceComments> _fetchComments(
+    DanmakuSource source, {
+    required String sourceId,
+    required String episodeId,
+    DanmakuCancelToken? cancelToken,
+    DanmakuProgressCallback? onProgress,
+  }) async {
+    if (source is ProgressiveDanmakuSource) {
+      return (source as ProgressiveDanmakuSource).fetchCommentsWithProgress(
+        episodeId: episodeId,
+        cancelToken: cancelToken,
+        onProgress: onProgress,
+      );
+    }
+    _report(
+      onProgress,
+      DanmakuLoadProgress(
+        phase: DanmakuLoadPhase.downloading,
+        sourceId: sourceId,
+      ),
+    );
+    final comments = await source.fetchComments(
+      episodeId: episodeId,
+      cancelToken: cancelToken,
+    );
+    _report(
+      onProgress,
+      DanmakuLoadProgress(phase: DanmakuLoadPhase.parsing, sourceId: sourceId),
+    );
+    return comments;
+  }
+
+  static void _report(
+    DanmakuProgressCallback? callback,
+    DanmakuLoadProgress progress,
+  ) {
+    if (callback == null) return;
+    try {
+      callback(progress);
+    } catch (_) {}
   }
 }

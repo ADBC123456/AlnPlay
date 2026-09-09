@@ -160,6 +160,7 @@ class AppLocalizations {
     'My': '我的',
     'Recently watched': '最近观看',
     'Movies': '电影',
+    'Anime': '动漫',
     'TV shows': '电视剧',
     'Sort': '排序',
     'Recently added': '最近入库',

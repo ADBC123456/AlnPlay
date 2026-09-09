@@ -69,6 +69,7 @@ void main() {
     expect(find.text('AlnPlay'), findsOneWidget);
     expect(find.text('最近观看'), findsOneWidget);
     expect(find.text('电影'), findsOneWidget);
+    expect(find.text('动漫'), findsOneWidget);
     expect(find.text('电视剧'), findsOneWidget);
     expect(find.text('媒体库'), findsOneWidget);
     expect(find.text('我的'), findsOneWidget);

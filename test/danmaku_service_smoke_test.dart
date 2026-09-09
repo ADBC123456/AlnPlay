@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -10,6 +11,7 @@ import 'package:dream_player/danmaku/models/danmaku_models.dart';
 import 'package:dream_player/danmaku/scraper/scrape_state.dart';
 import 'package:dream_player/danmaku/service/danmaku_service.dart';
 import 'package:dream_player/danmaku/source/danmaku_source_store.dart';
+import 'package:dream_player/danmaku/source/danmaku_source_registry.dart';
 import 'package:dream_player/models/video_item.dart';
 
 Future<void> body() async {
@@ -112,6 +114,83 @@ void main() {
   test('DanmakuService: match -> load -> cache hit end to end', () async {
     await body();
   });
+
+  test(
+    'force refresh does not route old request progress to new listeners',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final firstCommentArrived = Completer<void>();
+      final releaseFirstComment = Completer<void>();
+      var commentRequests = 0;
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.uri.path.endsWith('/match')) {
+          await utf8.decoder.bind(request).join();
+          request.response.write(
+            jsonEncode({
+              'success': true,
+              'isMatched': true,
+              'matches': [
+                {
+                  'episodeId': 'episode',
+                  'animeId': 'anime',
+                  'animeTitle': 'Show',
+                  'episodeTitle': 'Episode 1',
+                },
+              ],
+            }),
+          );
+        } else if (request.uri.path.contains('/comment/')) {
+          commentRequests++;
+          if (commentRequests == 1) {
+            firstCommentArrived.complete();
+            await releaseFirstComment.future;
+          }
+          request.response.write(jsonEncode({'comments': <Object>[]}));
+        }
+        await request.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      final tmp = await Directory.systemTemp.createTemp(
+        'danmaku_force_progress',
+      );
+      addTearDown(() async {
+        if (await tmp.exists()) await tmp.delete(recursive: true);
+      });
+      final service = DanmakuService.forTesting(
+        cacheDirectory: tmp,
+        configs: [
+          DanmakuSourceConfig(
+            id: 'force_src',
+            name: 'force',
+            baseUrl: 'http://127.0.0.1:${server.port}',
+          ),
+        ],
+      );
+      final identity = vid.VideoIdentity(
+        stableKey: 'force-progress',
+        fileName: 'Show.S01E01.mkv',
+      );
+      final oldProgress = <DanmakuLoadProgress>[];
+      final newProgress = <DanmakuLoadProgress>[];
+      final first = service.ensureForVideo(
+        identity,
+        onProgress: oldProgress.add,
+      );
+      await firstCommentArrived.future;
+      await service.ensureForVideo(
+        identity,
+        forceRefresh: true,
+        onProgress: newProgress.add,
+      );
+      final newCount = newProgress.length;
+      releaseFirstComment.complete();
+      await first;
+
+      expect(oldProgress, isNotEmpty);
+      expect(newProgress.length, newCount);
+    },
+  );
 
   test(
     'falls back to scraped title and exact episode after filename no-match',

@@ -731,6 +731,7 @@ class _HomeScreenState extends State<HomeScreen>
                   )
                 : (newest[b.id] ?? 0).compareTo(newest[a.id] ?? 0),
           );
+    final animationTitles = titles.where((title) => title.isAnimation).toList();
     final recent = recentLibraryItems(
       _entries,
       snapshot,
@@ -945,11 +946,27 @@ class _HomeScreenState extends State<HomeScreen>
                         onRemove: () => _removeVideo(recent[index].entry),
                       ),
                     ),
-                  for (final kind in MediaTitleKind.values)
-                    _posterShelf(
-                      kind,
-                      titles.where((title) => title.kind == kind).toList(),
-                    ),
+                  _posterShelf('Anime', animationTitles),
+                  _posterShelf(
+                    'Movies',
+                    titles
+                        .where(
+                          (title) =>
+                              title.kind == MediaTitleKind.movie &&
+                              !title.isAnimation,
+                        )
+                        .toList(),
+                  ),
+                  _posterShelf(
+                    'TV shows',
+                    titles
+                        .where(
+                          (title) =>
+                              title.kind == MediaTitleKind.tv &&
+                              !title.isAnimation,
+                        )
+                        .toList(),
+                  ),
                   if (titles.isEmpty && _librarySearch.trim().isNotEmpty)
                     const SliverToBoxAdapter(
                       child: Padding(
@@ -1068,8 +1085,8 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Widget _posterShelf(MediaTitleKind kind, List<MediaTitle> titles) => _shelf(
-    label: kind == MediaTitleKind.movie ? 'Movies' : 'TV shows',
+  Widget _posterShelf(String label, List<MediaTitle> titles) => _shelf(
+    label: label,
     count: titles.length,
     builder: (_, index) => LibraryPosterCard(
       key: ValueKey(titles[index].id),

@@ -13,6 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../widgets/player_gesture_surface.dart';
 import '../widgets/player_chrome.dart';
+import '../widgets/player_loading_overlay.dart';
 import '../library/unified_library_service.dart';
 import '../models/hdr_format.dart';
 import '../models/video_item.dart';
@@ -20,6 +21,8 @@ import '../danmaku/identity/video_identity.dart' as danmaku_identity;
 import '../danmaku/models/danmaku_models.dart';
 import '../danmaku/presentation/danmaku_overlay.dart';
 import '../danmaku/service/danmaku_service.dart';
+import '../danmaku/source/danmaku_source_registry.dart'
+    show DanmakuLoadPhase, DanmakuLoadProgress;
 import '../danmaku/settings/danmaku_display_settings.dart';
 import '../services/continue_watching.dart';
 import '../services/cache_quota_manager.dart';
@@ -178,6 +181,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   final ValueNotifier<int> _progressChanges = ValueNotifier(0);
   bool _playing = false;
   bool _buffering = false;
+  bool _openingVideo = !_inTests;
+  bool _awaitingVideoReady = false;
+  bool get _videoLoading =>
+      _openingVideo || _awaitingVideoReady || _preparingEpisode || _buffering;
   bool _completed = false;
   bool _holdingSpeed = false;
   double get _effectivePlaybackSpeed => _holdingSpeed ? 2.0 : _playbackSpeed;
@@ -186,6 +193,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   Object get _chromeState => (
     _playing,
     _buffering,
+    _awaitingVideoReady,
     _completed,
     _error,
     _controlsVisible,
@@ -210,7 +218,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   );
 
   void _refreshProgress() {
-    if (mounted && _controlsVisible) _progressChanges.value++;
+    if (mounted && (_controlsVisible || _videoLoading)) {
+      _progressChanges.value++;
+    }
   }
 
   /// Danmaku is a playback-side companion: loading or rendering failures must
@@ -226,6 +236,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   danmaku_canvas.DanmakuController? _danmakuCanvasController;
   List<DanmakuItemModel> _danmakuItems = const [];
   DanmakuStatus _danmakuStatus = DanmakuStatus.idle;
+  DanmakuLoadProgress? _danmakuProgress;
+  final Stopwatch _danmakuProgressClock = Stopwatch()..start();
+  int _lastDanmakuProgressMs = 0;
   bool _danmakuVisible = false;
   bool _danmakuConfigured = false;
   int _danmakuSeekRevision = 0;
@@ -527,6 +540,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (mounted) {
         _setTerminalError('Playback unavailable: $e');
       }
+    } finally {
+      if (mounted) setState(() => _openingVideo = false);
     }
   }
 
@@ -552,17 +567,33 @@ class _PlayerScreenState extends State<PlayerScreen>
         return;
       }
 
-      final identity = await danmaku_identity.identityForAsync(video);
-      if (!mounted || generation != _danmakuLoadGeneration) return;
       _danmakuItems = const [];
       _danmakuStatus = DanmakuStatus.loading;
+      _danmakuProgress = null;
       _syncDanmakuItems();
       setState(() {});
+
+      final identity = await danmaku_identity.identityForAsync(video);
+      if (!mounted || generation != _danmakuLoadGeneration) return;
 
       final outcome = await service.ensureForVideo(
         identity,
         metadata: video.metadataContext,
         forceRefresh: forceRefresh,
+        onProgress: (progress) {
+          if (!mounted || generation != _danmakuLoadGeneration) return;
+          final previousPhase = _danmakuProgress?.phase;
+          _danmakuProgress = progress;
+          final now = _danmakuProgressClock.elapsedMilliseconds;
+          // HTTP chunks can arrive hundreds of times per second. Keep the
+          // stage transitions immediate without rebuilding chrome per packet.
+          if (previousPhase != progress.phase ||
+              now - _lastDanmakuProgressMs >= 150 ||
+              progress.fraction == 1) {
+            _lastDanmakuProgressMs = now;
+            setState(() {});
+          }
+        },
       );
       if (!mounted || generation != _danmakuLoadGeneration) return;
       _danmakuItems = _filterDanmakuItems(outcome.items);
@@ -689,7 +720,42 @@ class _PlayerScreenState extends State<PlayerScreen>
     DanmakuStatus.idle => _danmakuConfigured ? 'Off' : 'No source configured',
   };
 
+  String _danmakuLoadingLabel(BuildContext context) {
+    if (_danmakuStatus != DanmakuStatus.loading) {
+      return context.tr(_danmakuStatusLabel);
+    }
+    final zh = AppLocalizations.of(context).isChinese;
+    final progress = _danmakuProgress;
+    if (progress == null) {
+      return zh ? '弹幕 · 正在读取视频信息…' : 'Comments · Reading video info…';
+    }
+    switch (progress.phase) {
+      case DanmakuLoadPhase.matching:
+        return zh ? '弹幕 · 正在匹配剧集…' : 'Comments · Matching episode…';
+      case DanmakuLoadPhase.parsing:
+        return zh ? '弹幕 · 正在解析…' : 'Comments · Parsing…';
+      case DanmakuLoadPhase.downloading:
+        final prefix = zh ? '弹幕 · 正在下载' : 'Comments · Downloading';
+        final fraction = progress.fraction;
+        if (fraction != null) return '$prefix ${(fraction * 100).floor()}%';
+        final bytes = progress.bytesReceived;
+        return bytes == null
+            ? '$prefix…'
+            : '$prefix · ${(bytes / 1024).toStringAsFixed(1)} KiB';
+    }
+  }
+
   Future<bool> _openCurrent() async {
+    if (!mounted) return false;
+    setState(() => _openingVideo = true);
+    try {
+      return await _prepareAndOpenCurrent();
+    } finally {
+      if (mounted) setState(() => _openingVideo = false);
+    }
+  }
+
+  Future<bool> _prepareAndOpenCurrent() async {
     _endHoldSpeed();
     if (_current.uriIsTransient) {
       try {
@@ -783,6 +849,9 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!mounted || _exo == null) return false;
     _preparedExoEvent = null;
     try {
+      // open() only acknowledges prepare/play; a READY event, not the method
+      // return, proves that the native backend has finished its initial load.
+      setState(() => _awaitingVideoReady = true);
       await _exo!.open(
         video.uriIsTransient ? '' : (video.path ?? ''),
         uri: video.uri,
@@ -926,7 +995,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// the details screen offers both engines up front.
   void _setTerminalError(String message) {
     _endHoldSpeed();
-    if (mounted) setState(() => _error = message);
+    if (mounted) {
+      setState(() {
+        _awaitingVideoReady = false;
+        _error = message;
+      });
+    }
   }
 
   /// Starts the libmpv engine as the user's chosen PRIMARY player (details
@@ -984,6 +1058,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _mpvPlayer = player;
       _mpvController = controller;
       _mpvActive = true;
+      _awaitingVideoReady = false;
       _mpvFailed = false;
       _mpvError = null;
       _buffering = true;
@@ -1978,6 +2053,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     final previousChrome = _chromeState;
     final wasPlaying = _playing;
     final wasBuffering = _buffering;
+    if (e.state == _nativeStateReady ||
+        e.ended ||
+        e.error?.isNotEmpty == true) {
+      _awaitingVideoReady = false;
+    }
     _playing = e.playing;
     _position = e.position;
     _duration = e.duration;
@@ -2690,7 +2770,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (_isTv || !_backendReady || _touchLocked || _inPip) return;
     final w = MediaQuery.of(context).size.width;
     final direction = PlayerGestureSurface.seekDirection(position.dx, w);
-    if (direction == 0) return;
+    if (direction == 0) {
+      _dtSeekTimer?.cancel();
+      setState(() => _dtSeekSide = null);
+      _togglePlayPause();
+      return;
+    }
     final forward = direction > 0;
     _seekBy(Duration(seconds: forward ? 10 : -10));
     _dtSeekTimer?.cancel();
@@ -6699,9 +6784,35 @@ class _PlayerScreenState extends State<PlayerScreen>
                   ),
                 ),
               ),
-            if (_buffering && _backendReady && _error == null)
-              const Center(
-                child: CircularProgressIndicator(color: Colors.white),
+            if (!_inPip &&
+                _error == null &&
+                !_mpvFailed &&
+                (_videoLoading ||
+                    (_danmakuVisible &&
+                        _danmakuStatus == DanmakuStatus.loading)))
+              Positioned.fill(
+                child: ListenableBuilder(
+                  listenable: _progressChanges,
+                  builder: (context, _) => PlayerLoadingOverlay(
+                    videoLoading: _videoLoading,
+                    preparingVideo: _openingVideo || _preparingEpisode,
+                    bufferedAhead: _buffered - _position,
+                    danmakuLabel: _danmakuVisible
+                        ? _danmakuLoadingLabel(context)
+                        : null,
+                    danmakuLoading: _danmakuStatus == DanmakuStatus.loading,
+                    danmakuProgress:
+                        _danmakuProgress?.phase == DanmakuLoadPhase.downloading
+                        ? _danmakuProgress?.fraction
+                        : null,
+                    danmakuBytesPerSecond:
+                        _danmakuStatus == DanmakuStatus.loading &&
+                            _danmakuProgress?.phase ==
+                                DanmakuLoadPhase.downloading
+                        ? _danmakuProgress?.bytesPerSecond
+                        : null,
+                  ),
+                ),
               ),
             Positioned.fill(
               child: PlayerChrome(

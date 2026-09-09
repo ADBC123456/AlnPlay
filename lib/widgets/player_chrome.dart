@@ -211,26 +211,29 @@ class PlayerChrome extends StatelessWidget {
           left: 0,
           right: 0,
           child: fade(
-            _PlayerBarBackground(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.transparent,
-                    Color(0x66000000),
-                    Color(0xCC000000),
-                  ],
-                ),
+            ConstrainedBox(
+              // Bound the complete interactive bar, including SafeArea and
+              // padding. Its hit-test region therefore never reaches the
+              // screen midpoint, which remains a real video gesture zone.
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * .45,
               ),
-              child: SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 24, 12, 4),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.sizeOf(context).height * .52,
-                    ),
+              child: _PlayerBarBackground(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.transparent,
+                      Color(0x66000000),
+                      Color(0xCC000000),
+                    ],
+                  ),
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 24, 12, 4),
                     child: SingleChildScrollView(
                       reverse: true,
                       child: Column(
@@ -341,7 +344,10 @@ class PlayerChrome extends StatelessWidget {
                               }
                               return Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [transport, actions],
+                                // The scroll view is reversed so its bottom
+                                // stays visible. Keep primary transport there
+                                // and let secondary actions scroll above it.
+                                children: [actions, transport],
                               );
                             },
                           ),

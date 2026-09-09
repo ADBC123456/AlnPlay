@@ -77,6 +77,31 @@ void main() {
     expect(result.entry!.appliedShiftSeconds, 2.5);
   });
 
+  test(
+    'reports real fallback source phases without invented byte totals',
+    () async {
+      final progress = <DanmakuLoadProgress>[];
+      await repository.loadForVideo(
+        sourceId: source.sourceId,
+        baseUrl: 'https://danmaku.example',
+        request: const DanmakuVideoRequest(
+          videoIdentity: 'video-progress',
+          fileName: 'Example.S01E01.mkv',
+        ),
+        onProgress: progress.add,
+      );
+
+      expect(progress.map((item) => item.phase), [
+        DanmakuLoadPhase.matching,
+        DanmakuLoadPhase.downloading,
+        DanmakuLoadPhase.parsing,
+      ]);
+      expect(progress[1].bytesReceived, isNull);
+      expect(progress[1].totalBytes, isNull);
+      expect(progress[1].fraction, isNull);
+    },
+  );
+
   test('a changed binding does not reuse another episode cache', () async {
     const request = DanmakuVideoRequest(
       videoIdentity: 'video-rebound',
