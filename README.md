@@ -95,16 +95,6 @@ STRM 能减少扫描视频流的请求，但不能保证第三方网盘不会限
 - `.strm` 只支持 HTTP(S) target；不会请求嵌套 STRM，也不会把源 WebDAV 凭据发送给 target。
 - 不把“支持某格式”理解为所有设备都能硬解；HDR/DV、音频 passthrough、容器和字幕能力始终受设备与系统限制。
 
-## 截图
-
-以下为仓库已有界面截图，可能与当前开发版本的 Dock 和布局不同。
-
-<p align="center">
-  <img src="screenshots/home.jpg" width="220" alt="首页">
-  <img src="screenshots/movie_detail.jpg" width="220" alt="影视详情">
-  <img src="screenshots/menu.jpg" width="220" alt="添加内容菜单">
-  <img src="screenshots/settings.jpg" width="220" alt="设置">
-</p>
 
 ## 下载与安装
 
