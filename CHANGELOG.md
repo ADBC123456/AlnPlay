@@ -16,7 +16,7 @@ pulled into the GitHub Release body automatically by `.github/workflows/release.
 
 - **Home Dock liquid glass** — the bar keeps its gaussian blur and existing layout, while the moving selection lens refracts the backdrop behind it: blue, green and red sampled with different IOR offsets, dispersion fading to nothing across the flat centre, spring return on release, touch-following highlight and a thin dark rim. Falls back to plain blur where background sampling is unavailable.
 - **TMDB matching** — movie sequels (`Part 2`, `Vol 3`, `第X部`) stay movies instead of inheriting an episode number from their folder, live-action releases are told apart from the animated show they share a title with, and arc folders map to a season only when the official season name matches exactly and uniquely.
-- **Releases carry Android APKs only** — the tag workflow builds the universal and split-per-abi APKs; iOS distribution stays in the manual, optionally signed workflow.
+- **Releases build every platform** — a version tag publishes the universal and split-per-abi Android APKs together with the unsigned iOS/iPadOS IPA, all built from the same commit.
 
 ### Fixed
 

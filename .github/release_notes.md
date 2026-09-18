@@ -29,7 +29,7 @@ Notes:
 
 ## Versioning
 
-App version follows **semver**, bumped per release (current release: **1.0.1**).
+App version follows **semver**, bumped per release (current release: **1.2.0**).
 
 ## Playing videos from your NAS / SMB share
 

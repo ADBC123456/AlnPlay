@@ -16,7 +16,7 @@
 | 一键清空媒体库 / 继续观看 | 移植并加竞态保护 | 首页「媒体库操作」、`UnifiedLibraryService.clearLibrary()` |
 | SDR 被误判为 HDR 的修复 | 移植 | `HdrStaticMetadata.kt` + `lib/…/ExoPlayerView.kt` |
 | iOS 内购入口（构建开关控制） | 不合并 | 商业决定，AlnPlay 无内购 |
-| GitHub 发布仅产出 Android APK | 合并 | `.github/workflows/release.yml` |
+| GitHub 发布仅产出 Android APK | 不合并 | 保持全平台发布（APK + 未签名 IPA） |
 
 ## 逐项说明
 
@@ -109,9 +109,11 @@ AlnPlay 的实现：
 ### 9. iOS 内购入口（不合并）
 
 AlnPlay 目前没有内购，也不打算在本次功能合并里引入商业入口，因此不移植。
-上游「发布流程只产出 Android APK」这一条与本项目发布策略一致，已合并：
-`.github/workflows/release.yml` 删除 iOS job，iOS 构建继续走
-`.github/workflows/ios.yml`（手动、可选签名）。
+
+上游「发布流程只产出 Android APK」这一条**不采纳**：本项目一次发布同时产出
+Android 的 universal / split-per-abi APK 与未签名 iOS IPA（`.github/workflows/
+release.yml` 的 `android` + `ios` job，`release` job 依赖两者），
+`.github/workflows/ios.yml` 继续提供手动、可选签名的构建。
 
 ## 验证
 
