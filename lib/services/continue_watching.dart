@@ -123,44 +123,63 @@ class ContinueWatchingStore {
     }
   }
 
-  static Future<void> save(VideoItem video, Duration position) async {
-    if (position.inMilliseconds < 10000) return;
-    final key = keyFor(video);
-    if (key.isEmpty) return;
-    // Keep non-sensitive source identity and media metadata. VideoItem.toJson
-    // intentionally omits httpHeaders, so WebDAV credentials are rehydrated
-    // from the native encrypted store by [load].
-    final entryVideo = video.withPlaybackInfo(duration: video.duration);
-    final all = await load();
-    all.removeWhere((e) => keyFor(e.video) == key);
-    all.insert(
-      0,
-      ContinueWatchingEntry(
-        video: entryVideo,
-        position: position,
-        updatedAt: DateTime.now(),
-      ),
+  static Future<void> _writes = Future.value();
+
+  static Future<void> _serial(Future<void> Function() work) {
+    final operation = _writes.then((_) => work());
+    _writes = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
     );
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _prefsKey,
-      jsonEncode(all.map((e) => e.toJson()).toList()),
-    );
-    final file = UnifiedLibraryService.instance.snapshot.files.values
-        .where((file) => file.legacyResumeKey == key)
-        .firstOrNull;
-    if (file?.titleId != null) {
-      await TitlePlaybackPreferences.save(
-        titleId: file!.titleId!,
-        lastPlayedFileId: file.id,
-        lastPlayedEpisodeId: file.episodeId,
-        playedAt: all.first.updatedAt,
-      );
-    }
-    changes.notify();
+    return operation;
   }
 
-  static Future<void> remove(String key) async {
+  static Future<void> clearAll() => _serial(() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsKey);
+    changes.notify();
+  });
+
+  static Future<void> save(VideoItem video, Duration position) => _serial(
+    () async {
+      if (position.inMilliseconds < 10000) return;
+      final key = keyFor(video);
+      if (key.isEmpty) return;
+      // Keep non-sensitive source identity and media metadata. VideoItem.toJson
+      // intentionally omits httpHeaders, so WebDAV credentials are rehydrated
+      // from the native encrypted store by [load].
+      final entryVideo = video.withPlaybackInfo(duration: video.duration);
+      final all = await load();
+      all.removeWhere((e) => keyFor(e.video) == key);
+      all.insert(
+        0,
+        ContinueWatchingEntry(
+          video: entryVideo,
+          position: position,
+          updatedAt: DateTime.now(),
+        ),
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _prefsKey,
+        jsonEncode(all.map((e) => e.toJson()).toList()),
+      );
+      final file = UnifiedLibraryService.instance.snapshot.files.values
+          .where((file) => file.legacyResumeKey == key)
+          .firstOrNull;
+      if (file?.titleId != null) {
+        await TitlePlaybackPreferences.save(
+          titleId: file!.titleId!,
+          lastPlayedFileId: file.id,
+          lastPlayedEpisodeId: file.episodeId,
+          playedAt: all.first.updatedAt,
+        );
+      }
+      changes.notify();
+    },
+  );
+
+  static Future<void> remove(String key) => _serial(() async {
     if (key.isEmpty) return;
     final all = await load();
     all.removeWhere((e) => keyFor(e.video) == key);
@@ -170,5 +189,5 @@ class ContinueWatchingStore {
       jsonEncode(all.map((e) => e.toJson()).toList()),
     );
     changes.notify();
-  }
+  });
 }

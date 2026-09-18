@@ -829,33 +829,7 @@ class ExoPlayerView(
     /// payload type 137 (mastering display colour volume) or
     /// payload type 144 (content light level).
     private fun nalHasStaticHdrSei(buf: ByteArray, start: Int, len: Int): Boolean {
-        if (len < 2) return false
-        val nalType = ((buf[start].toInt() and 0xFF) shr 1) and 0x3F
-        if (nalType != 39 && nalType != 40) return false // prefix/suffix SEI
-        val end = start + len
-        var i = start + 2
-        while (i + 1 < end) {
-            var payloadType = 0
-            while (i < end && (buf[i].toInt() and 0xFF) == 0xFF) {
-                payloadType += 255
-                i++
-            }
-            if (i >= end) return false
-            payloadType += buf[i].toInt() and 0xFF
-            i++
-            var payloadSize = 0
-            while (i < end && (buf[i].toInt() and 0xFF) == 0xFF) {
-                payloadSize += 255
-                i++
-            }
-            if (i >= end) return false
-            payloadSize += buf[i].toInt() and 0xFF
-            i++
-            if (payloadType == 137 || payloadType == 144) return true
-            i += payloadSize
-            if (i > end) return false
-        }
-        return false
+        return HdrStaticMetadata.containsValidSei(buf, start, len)
     }
 
     /// Scans one encoded video sample for static HDR10 SEI (payload types

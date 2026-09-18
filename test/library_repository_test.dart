@@ -18,6 +18,20 @@ void main() {
     if (await directory.exists()) await directory.delete(recursive: true);
   });
 
+  test('clear invalidates old batches and backup recovery stays empty', () async {
+    await repository.applyScanBatch(const ScanBatch(rootId: 'root', generation: '1', isStart: true));
+    final file = _file(id: 'one', rootId: 'root', sourceId: 'files:device');
+    await repository.applyScanBatch(ScanBatch(rootId: 'root', generation: '1', files: [file]));
+    await repository.clearAll();
+    await repository.applyScanBatch(ScanBatch(rootId: 'root', generation: '1', files: [file]));
+    expect((await repository.snapshot()).files, isEmpty);
+    await File('${directory.path}/catalog.json').writeAsString('broken');
+    final restarted = JsonLibraryRepository(storageDirectory: directory);
+    expect((await restarted.snapshot()).files, isEmpty);
+    expect((await restarted.snapshot()).titles, isEmpty);
+    await restarted.close();
+  });
+
   test('aggregates one title and episode across source versions', () async {
     const title = MediaTitle(
       id: 'tmdb:tv:42',

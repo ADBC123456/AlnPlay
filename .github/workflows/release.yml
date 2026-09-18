@@ -1,8 +1,8 @@
 name: Release
 
 # Publishing a release is just tagging: `git tag v0.1.0 && git push origin v0.1.0`.
-# This workflow builds the Android split-per-abi APKs and the unsigned
-# iOS IPA, then creates an AlnPlay GitHub Release on version tags.
+# This workflow builds Android APKs only, then creates an AlnPlay GitHub
+# Release on version tags. iOS distribution stays in the signed/manual flow.
 # (No AAB — Play Store publishing isn't set up yet.)
 on:
   push:
@@ -57,57 +57,10 @@ jobs:
           path: |
             build/app/outputs/flutter-apk/AlnPlay-*.apk
 
-  ios:
-    name: Build unsigned iOS IPA
-    runs-on: macos-26
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Accept Xcode license
-        run: |
-          sudo xcodebuild -license accept || true
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.47.2'
-          channel: stable
-
-      - name: Fetch dependencies
-        run: |
-          flutter config --enable-ios --enable-swift-package-manager
-          flutter pub get
-
-      - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign --dart-define=TMDB_API_KEY=${{ secrets.TMDB_API_KEY }} --dart-define=OPENSUBTITLES_API_KEY=${{ secrets.OPENSUBTITLES_API_KEY }} --dart-define=SIMKL_CLIENT_ID=${{ secrets.SIMKL_CLIENT_ID }}
-
-      - name: Verify HTTP is enabled in the built app
-        run: |
-          VALUE="$(/usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsArbitraryLoads' build/ios/iphoneos/Runner.app/Info.plist)"
-          test "$VALUE" = "true"
-
-      - name: Package unsigned IPA
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          mkdir -p Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -ryq "AlnPlay-${VERSION}-unsigned.ipa" Payload
-
-      - name: Upload iOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: AlnPlay-ios-unsigned
-          path: AlnPlay-*-unsigned.ipa
-
   release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [android, ios]
+    needs: [android]
     runs-on: ubuntu-latest
 
     steps:
@@ -143,4 +96,3 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/AlnPlay-android/**/*.apk
-            artifacts/AlnPlay-ios-unsigned/AlnPlay-*-unsigned.ipa

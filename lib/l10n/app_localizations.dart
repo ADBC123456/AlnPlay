@@ -126,6 +126,23 @@ class AppLocalizations {
   }
 
   static const Map<String, String> _zh = {
+    'Offline artwork': '离线图片缓存',
+    'Kept until manually cleared': '长期保留，可手动清理',
+    'Clear offline artwork?': '清除离线图片缓存？',
+    'Posters, backdrops, episode stills and cast photos will need to be downloaded again. Your library and videos are kept.':
+        '海报、背景图、单集截图和演员照片需要重新下载。媒体库与视频文件会保留。',
+    'Limits temporary files and danmaku; offline artwork is managed separately.':
+        '限制临时文件与弹幕缓存；离线图片缓存单独管理。',
+    'Library actions': '媒体库操作',
+    'Clear library': '清空媒体库',
+    'Clear library?': '清空媒体库？',
+    'Clear continue watching': '清空继续观看',
+    'Clear continue watching?': '清空继续观看？',
+    'Removes library folders and the media index. Your video files, saved servers and watch history are kept.':
+        '移除媒体库收藏目录和影片索引。保留视频文件、服务器配置与观看记录。',
+    'Removes all entries from continue watching. Saved playback positions and watched marks are kept.':
+        '移除继续观看列表中的全部条目。保留播放进度和已看标记。',
+    'Could not clear library data.': '清空失败，请重试。',
     'Scan depth': '扫描层级',
     'Library scan settings': '媒体库扫描设置',
     'This STRM file could not be read': '无法读取此 STRM 文件，请检查文件内容与来源连接。',

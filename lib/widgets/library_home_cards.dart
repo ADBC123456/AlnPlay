@@ -1,3 +1,4 @@
+import '../widgets/cached_image.dart';
 import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
@@ -85,14 +86,14 @@ class LibraryArtwork extends StatelessWidget {
     );
     Widget fallback() => fallbackUrl == null || fallbackUrl == url
         ? placeholder
-        : Image.network(
+        : CachedImage(
             fallbackUrl!,
             fit: BoxFit.cover,
             errorBuilder: (_, _, _) => placeholder,
           );
     return url == null || url!.isEmpty
         ? fallback()
-        : Image.network(
+        : CachedImage(
             url!,
             fit: BoxFit.cover,
             errorBuilder: (_, _, _) => fallback(),

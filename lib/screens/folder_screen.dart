@@ -1,3 +1,4 @@
+import '../widgets/cached_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -740,7 +741,7 @@ class _FolderScreenState extends State<FolderScreen> {
       child: Stack(
         children: [
           if (backdrop != null)
-            Image.network(
+            CachedImage(
               backdrop,
               height: 140,
               width: double.infinity,
@@ -966,7 +967,7 @@ class _Poster extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(4),
-      child: Image.network(
+      child: CachedImage(
         posterUrl,
         width: 48,
         height: 72,

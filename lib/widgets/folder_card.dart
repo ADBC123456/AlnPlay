@@ -1,3 +1,4 @@
+import '../widgets/cached_image.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -360,13 +361,13 @@ class _FolderCardState extends State<FolderCard> {
                             ),
                           ),
                           if (posterUrl != null)
-                            Image.network(
+                            CachedImage(
                               posterUrl,
                               fit: BoxFit.cover,
                               errorBuilder: (_, _, _) =>
                                   fallbackPosterUrl != null &&
                                       fallbackPosterUrl != posterUrl
-                                  ? Image.network(
+                                  ? CachedImage(
                                       fallbackPosterUrl,
                                       fit: BoxFit.cover,
                                       errorBuilder: (_, _, _) =>

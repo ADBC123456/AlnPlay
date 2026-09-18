@@ -295,6 +295,23 @@ void main() {
       MetadataState.unresolved,
     );
   });
+
+  test('cancel all also skips roots queued behind the running source', () async {
+    final adapter = _FakeAdapter(sourceId: 'source:a', pages: {
+      'root|': ListingPage(entries: [_videoEntry('slow.mkv')]),
+    });
+    final resolver = _BlockingResolver();
+    final scanner = CoordinatedLibraryScanner(repository: repository,
+      adapters: [adapter], metadataResolver: resolver);
+    final scan = scanner.refreshRoots([_root('first', adapter.sourceId), _root('queued', adapter.sourceId)]);
+    await repository.watch().firstWhere((snapshot) => snapshot.files.isNotEmpty);
+    scanner.cancelAll();
+    resolver.release.complete();
+    await scan;
+    expect(adapter.calls, ['root|']);
+    await repository.clearAll();
+    expect((await repository.snapshot()).files, isEmpty);
+  });
 }
 
 LibraryRoot _root(String id, String sourceId) => LibraryRoot(

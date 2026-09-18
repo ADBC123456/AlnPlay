@@ -3,6 +3,27 @@
 All notable changes to AlnPlay are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 1.2.0
+
+### Added
+
+- **Persistent offline artwork** — posters, backdrops, episode stills and cast photos are stored on disk and keep rendering after a restart with no connection. Artwork is fetched only from TMDB image URLs under a 12 MiB per-file cap with at most three concurrent downloads; Settings → Storage shows the space used and clears it after confirmation, separate from the temporary cache budget.
+- **Library cleanup actions** — the library screen's menu can clear continue watching or the whole media library, each behind a confirmation dialog. Clearing the library stops the running scan, invalidates queued results, then removes the folders, the media index and its recovery copies; video files, saved servers and watch history are untouched.
+- **Collapsible settings groups and details backdrop** — settings sections collapse and remember their state, and the title details page collapses its backdrop into a pinned bar with the title and a back button.
+- **New bookmarks scan immediately** — a folder added to the library joins the scan queue right away, so its subfolders and files appear in the library without a manual refresh (SMB, WebDAV, FTP, DLNA and local folders).
+
+### Changed
+
+- **Home Dock liquid glass** — the bar keeps its gaussian blur and existing layout, while the moving selection lens refracts the backdrop behind it: blue, green and red sampled with different IOR offsets, dispersion fading to nothing across the flat centre, spring return on release, touch-following highlight and a thin dark rim. Falls back to plain blur where background sampling is unavailable.
+- **TMDB matching** — movie sequels (`Part 2`, `Vol 3`, `第X部`) stay movies instead of inheriting an episode number from their folder, live-action releases are told apart from the animated show they share a title with, and arc folders map to a season only when the official season name matches exactly and uniquely.
+- **Releases carry Android APKs only** — the tag workflow builds the universal and split-per-abi APKs; iOS distribution stays in the manual, optionally signed workflow.
+
+### Fixed
+
+- **SDR misdetected as HDR** — HEVC SEI payloads are now validated (emulation-prevention bytes unescaped, payload sizes and mastering/CLL luminance ranges checked) instead of treating any type 137/144 payload as HDR10.
+- **Offline artwork and cache clearing** — an online request always fetches the exact size instead of substituting a smaller cached one (offline falls back to the largest cached size), and a download in flight can no longer repopulate the cache after it is cleared.
+- **Scan and list races** — clearing the library while a scan is running, continuing to watch while the shelf is cleared, and folder writes racing each other no longer overwrite each other's data.
+
 ## 1.1.0
 
 ### Added

@@ -41,6 +41,15 @@ void main() {
     expect(await ContinueWatchingStore.load(), isEmpty);
   });
 
+  test('clear is ordered after pending saves and preserves unrelated prefs', () async {
+    SharedPreferences.setMockInitialValues({'dreamplayer.appLanguage': 'en'});
+    final save = ContinueWatchingStore.save(video, const Duration(minutes: 2));
+    final clear = ContinueWatchingStore.clearAll();
+    await Future.wait([save, clear]);
+    expect(await ContinueWatchingStore.load(), isEmpty);
+    expect((await SharedPreferences.getInstance()).getString('dreamplayer.appLanguage'), 'en');
+  });
+
   test('persists WebDAV identity but never Authorization headers', () {
     const securedVideo = VideoItem(
       id: 'webdav_server/file.mkv',

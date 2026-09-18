@@ -4,8 +4,9 @@ import 'thumbnail_store.dart';
 
 /// Clears the app's cached data: on-disk cache (subtitle re-encode temp files
 /// and anything else the engine wrote to the platform cache dirs) plus
-/// Flutter's in-memory image cache, which holds the TMDB posters/backdrops/
-/// stills the cards and details screens have fetched via [Image.network].
+/// Flutter's in-memory image cache, which holds the decoded posters/backdrops/
+/// stills the cards and details screens render. Persistent artwork lives in
+/// `ImageCacheService` and is only removed by its own confirmed action.
 class CacheCleaner {
   CacheCleaner._();
 

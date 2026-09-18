@@ -151,6 +151,22 @@ class LibraryFoldersStore {
   LibraryFoldersStore._();
 
   static const String _prefsKey = 'dreamplayer.libraryFolders';
+  static Future<void> _writes = Future.value();
+
+  static Future<void> _serial(Future<void> Function() work) {
+    final operation = _writes.then((_) => work());
+    _writes = operation.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return operation;
+  }
+
+  static Future<void> clearAll() => _serial(() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsKey);
+    changes.notify();
+  });
 
   /// Fires whenever the folder list changes, so the home screen reloads.
   static final StoreChangeNotifier changes = StoreChangeNotifier();
@@ -169,7 +185,7 @@ class LibraryFoldersStore {
     }
   }
 
-  static Future<void> add(LibraryFolder folder) async {
+  static Future<void> add(LibraryFolder folder) => _serial(() async {
     final all = await load();
     all.removeWhere((f) => f.id == folder.id);
     all.insert(0, folder);
@@ -179,9 +195,9 @@ class LibraryFoldersStore {
       jsonEncode(all.map((f) => f.toJson()).toList()),
     );
     changes.notify();
-  }
+  });
 
-  static Future<void> remove(String id) async {
+  static Future<void> remove(String id) => _serial(() async {
     final all = await load();
     all.removeWhere((f) => f.id == id);
     final prefs = await SharedPreferences.getInstance();
@@ -190,18 +206,19 @@ class LibraryFoldersStore {
       jsonEncode(all.map((f) => f.toJson()).toList()),
     );
     changes.notify();
-  }
+  });
 
-  static Future<void> setMaxScanDepth(String id, int depth) async {
-    final all = await load();
-    final index = all.indexWhere((folder) => folder.id == id);
-    if (index < 0) return;
-    all[index] = all[index].copyWith(maxScanDepth: depth);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _prefsKey,
-      jsonEncode(all.map((folder) => folder.toJson()).toList()),
-    );
-    changes.notify();
-  }
+  static Future<void> setMaxScanDepth(String id, int depth) =>
+      _serial(() async {
+        final all = await load();
+        final index = all.indexWhere((folder) => folder.id == id);
+        if (index < 0) return;
+        all[index] = all[index].copyWith(maxScanDepth: depth);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+          _prefsKey,
+          jsonEncode(all.map((folder) => folder.toJson()).toList()),
+        );
+        changes.notify();
+      });
 }

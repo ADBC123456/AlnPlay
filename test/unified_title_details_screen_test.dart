@@ -116,6 +116,46 @@ void main() {
     }
   }
 
+  testWidgets('collapsing the backdrop reveals the app bar title and back', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    // Landscape phone: the hero is at its minimum height, so the page can
+    // actually scroll past it (a short portrait page cannot collapse fully).
+    const size = Size(844, 390);
+    await tester.binding.setSurfaceSize(size);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final library = UnifiedLibraryService.instance;
+    final previous = library.snapshot;
+    library.snapshot = _snapshot;
+    addTearDown(() => library.snapshot = previous);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        themeMode: ThemeMode.dark,
+        darkTheme: ThemeData.dark(),
+        home: MediaQuery(
+          data: const MediaQueryData(size: size),
+          child: const UnifiedTitleDetailsScreen(titleId: 'tmdb:tv:229192'),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    // Expanded: only the hero paints the title, and it owns the back arrow.
+    expect(find.byType(BackButton), findsNothing);
+    expect(find.text('沧元图'), findsOneWidget);
+
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -700));
+    await tester.pumpAndSettle();
+
+    // Collapsed: the bar adds its own title and the system back button.
+    expect(find.byType(BackButton), findsOneWidget);
+    expect(find.text('沧元图'), findsNWidgets(2));
+    expect(tester.takeException(), isNull);
+  });
+
   for (final size in [const Size(390, 844), const Size(1100, 700)]) {
     testWidgets('renders screenshot-style details without overflow at $size', (
       tester,

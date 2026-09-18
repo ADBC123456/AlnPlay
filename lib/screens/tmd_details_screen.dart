@@ -1,3 +1,4 @@
+import '../widgets/cached_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:io' show Platform;
@@ -980,7 +981,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
             Stack(
               children: [
                 headerImage != null
-                    ? Image.network(
+                    ? CachedImage(
                         headerImage,
                         width: double.infinity,
                         height: double.infinity,
@@ -988,7 +989,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                         errorBuilder: (_, _, _) =>
                             fallbackHeaderImage != null &&
                                 fallbackHeaderImage != headerImage
-                            ? Image.network(
+                            ? CachedImage(
                                 fallbackHeaderImage,
                                 width: double.infinity,
                                 height: double.infinity,
@@ -1025,7 +1026,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(10),
                       child: movie.posterUrl(width: 342) != null
-                          ? Image.network(
+                          ? CachedImage(
                               movie.posterUrl(width: 342)!,
                               width: 104,
                               height: 156,
@@ -1034,7 +1035,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                                   fallbackPosterImage != null &&
                                       fallbackPosterImage !=
                                           movie.posterUrl(width: 342)
-                                  ? Image.network(
+                                  ? CachedImage(
                                       fallbackPosterImage,
                                       width: 104,
                                       height: 156,
@@ -1535,7 +1536,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
               Stack(
                 children: [
                   if (info.backdropUrl != null)
-                    Image.network(
+                    CachedImage(
                       info.backdropUrl!,
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) => _artworkFallback(colorScheme),
@@ -1568,7 +1569,7 @@ class _TmdDetailsScreenState extends State<TmdDetailsScreen> {
                       ClipRRect(
                         borderRadius: BorderRadius.circular(10),
                         child: info.imageUrl != null
-                            ? Image.network(
+                            ? CachedImage(
                                 info.imageUrl!,
                                 width: 104,
                                 height: 156,
@@ -2085,7 +2086,7 @@ class _CastRow extends StatelessWidget {
                     ClipRRect(
                       borderRadius: BorderRadius.circular(40),
                       child: member.profileUrl() != null
-                          ? Image.network(
+                          ? CachedImage(
                               member.profileUrl()!,
                               width: 72,
                               height: 72,
@@ -2176,7 +2177,7 @@ class _StillsGallery extends StatelessWidget {
             itemBuilder: (context, index) {
               return ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.network(
+                child: CachedImage(
                   stills[index],
                   height: 120,
                   width: 213, // 16:9 aspect
@@ -2512,7 +2513,7 @@ class _Poster extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(4),
-      child: Image.network(
+      child: CachedImage(
         posterUrl,
         width: 48,
         height: 72,
@@ -2678,7 +2679,7 @@ class _SearchDialogState extends State<_SearchDialog> {
                       final movie = _results![index];
                       return ListTile(
                         leading: movie.posterUrl(width: 92) != null
-                            ? Image.network(
+                            ? CachedImage(
                                 movie.posterUrl(width: 92)!,
                                 width: 36,
                                 height: 54,

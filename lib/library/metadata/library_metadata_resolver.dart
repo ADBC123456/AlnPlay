@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../../services/tmdb_client.dart';
+import '../../services/image_cache_service.dart';
 import '../models/library_models.dart';
 import '../repository/library_repository.dart';
 
@@ -59,6 +60,36 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
         : TmdService.instance.metaFor('folder:$rootId');
     if (folderMeta != null && _inheritsRootBinding(context.directoryNames)) {
       return _resolveFromFolderMatch(file, context, folderMeta);
+    }
+    if (folderMeta?.movie.kind == TmdKind.tv &&
+        context.directoryNames.length > 1) {
+      try {
+        final details =
+            folderMeta!.details ??
+            await TmdService.instance.detailsFor('folder:$rootId') ??
+            await _detailsShared(folderMeta.movie);
+        final arc = context.directoryNames
+            .skip(1)
+            .where(
+              (name) =>
+                  !ParsedFileName.isContainerDirectory(name) &&
+                  !ParsedFileName.isSeasonDirectory(name),
+            )
+            .toList();
+        final season = arc.length == 1
+            ? details.seasonForFolder(arc.single)
+            : null;
+        if (season != null) {
+          return _resolveFromFolderMatch(
+            file,
+            context,
+            folderMeta.withDetails(details),
+            inferredSeason: season,
+          );
+        }
+      } on Exception {
+        // Unknown/offline season names must not force an arc into the last season.
+      }
     }
 
     final key = await _api.effectiveApiKey();
@@ -170,6 +201,7 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
               : Duration(minutes: officialEpisode!.runtimeMinutes!),
         );
       }
+      _prefetchArtwork(title, episode, details);
       return MatchResult(
         file: file.copyWith(
           titleId: titleId,
@@ -194,13 +226,26 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
   Future<MatchResult> _resolveFromFolderMatch(
     MediaFile file,
     DiscoveryContext context,
-    TmdMeta meta,
-  ) async {
+    TmdMeta meta, {
+    int? inferredSeason,
+  }) async {
     final movie = meta.movie;
-    final parsed = ParsedFileName.parseWithAncestors(
+    var parsed = ParsedFileName.parseWithAncestors(
       file.originalFileName,
       context.directoryNames,
     );
+    if (!parsed.seasonKnown && parsed.isEpisode && inferredSeason != null) {
+      parsed = ParsedFileName(
+        title: movie.title,
+        seriesName: movie.title,
+        year: parsed.year,
+        isEpisode: true,
+        episode: parsed.episode,
+        season: inferredSeason,
+        seasonKnown: true,
+        liveAction: parsed.liveAction,
+      );
+    }
     TmdDetails? details = meta.details;
     if (details == null) {
       try {
@@ -269,6 +314,7 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
             : Duration(minutes: official!.runtimeMinutes!),
       );
     }
+    _prefetchArtwork(title, episode, details);
     return MatchResult(
       file: file.copyWith(
         titleId: titleId,
@@ -370,6 +416,19 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
 
   static String? _imageUrl(String? path, {int width = 342}) =>
       path == null ? null : 'https://image.tmdb.org/t/p/w$width$path';
+
+  static void _prefetchArtwork(
+    MediaTitle title,
+    LibraryEpisode? episode,
+    TmdDetails? details,
+  ) {
+    ImageCacheService.instance.prefetch([
+      title.poster,
+      title.backdrop,
+      episode?.still,
+      ...?details?.cast.map((person) => person.profileUrl()),
+    ]);
+  }
 
   static bool _inheritsRootBinding(List<String> ancestors) =>
       ancestors.isNotEmpty &&

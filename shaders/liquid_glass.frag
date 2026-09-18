@@ -1,45 +1,66 @@
-// Local icon/text-atlas lens inspired by Kyant0/AndroidLiquidGlass.
-// The live page backdrop remains a native BackdropFilter; this shader never
-// samples the page or a platform/HDR video surface.
+// Independent Flutter implementation of edge-normal RGB backdrop sampling.
+// Optical approach: https://github.com/zsio/liquid-glass (src/glass.ts).
+// No DOM, SVG filter, generated texture or upstream source is bundled.
 #version 460 core
 #include <flutter/runtime_effect.glsl>
 
-uniform vec2 uAtlasSize;
-uniform vec2 uLensCenter;
-uniform vec2 uLensSize;
-uniform float uPressed;
-uniform sampler2D uAtlas;
+// ImageFilter.shader supplies the first vec2 and sampler automatically.
+uniform vec2 uTextureSize;
+uniform vec2 uLogicalSize;
+uniform float uDispersion;
+uniform float uRefraction;
+uniform vec2 uOrigin;
+uniform vec2 uViewportSize;
+uniform sampler2D uBackdrop;
 out vec4 fragColor;
 
-float roundedBoxSdf(vec2 p, vec2 halfSize, float radius) {
-  vec2 q = abs(p) - halfSize + radius;
-  return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+vec4 sampleBackdrop(vec2 uv) {
+  uv = clamp(uv, 0.5 / uTextureSize, 1.0 - 0.5 / uTextureSize);
+#ifdef IMPELLER_TARGET_OPENGLES
+  uv.y = 1.0 - uv.y;
+#endif
+  return texture(uBackdrop, uv);
+}
+
+vec4 sampleSoft(vec2 uv, float sigma) {
+  vec2 spread = vec2(2.0 * sigma) / uViewportSize;
+  return sampleBackdrop(uv) * 0.5 +
+      (sampleBackdrop(uv + vec2(spread.x, 0.0)) +
+       sampleBackdrop(uv - vec2(spread.x, 0.0)) +
+       sampleBackdrop(uv + vec2(0.0, spread.y)) +
+       sampleBackdrop(uv - vec2(0.0, spread.y))) * 0.125;
+}
+
+float bending(float incident, float ior) {
+  // Snell's law at an air/glass interface; the bevel acts as a thin lens.
+  return tan(incident - asin(sin(incident) / ior));
 }
 
 void main() {
-  vec2 point = FlutterFragCoord().xy;
-  vec2 halfSize = uLensSize * 0.5;
-  float radius = min(halfSize.x, halfSize.y);
-  vec2 fromCenter = point - uLensCenter;
-  float distance = roundedBoxSdf(fromCenter, halfSize, radius);
-  if (distance > 0.0) {
-    fragColor = vec4(0.0);
+  vec2 uv = FlutterFragCoord().xy / uTextureSize;
+  vec2 point = uv * uViewportSize - uOrigin - uLogicalSize * 0.5;
+  float radius = min(uLogicalSize.x, uLogicalSize.y) * 0.5;
+  vec2 straight = max(uLogicalSize * 0.5 - radius, vec2(0.0));
+  vec2 axis = clamp(point, -straight, straight);
+  vec2 fromAxis = point - axis;
+  float depth = max(radius - length(fromAxis), 0.0);
+  vec2 normal = fromAxis / max(length(fromAxis), 0.001);
+  float bevel = min(12.0, radius * 0.45);
+  if (depth >= bevel) {
+    fragColor = sampleBackdrop(uv);
     return;
   }
-
-  float radial = clamp(
-    length(fromCenter / max(halfSize, vec2(1.0))),
-    0.0,
-    1.0
-  );
-  float edge = smoothstep(0.18, 1.0, radial);
-  vec2 normal = normalize(fromCenter + vec2(0.0001));
-  float strength = mix(1.8, 4.2, edge) + uPressed * 1.2;
-  vec2 displaced = point - normal * strength;
-  vec2 uv = clamp(displaced / uAtlasSize, vec2(0.001), vec2(0.999));
-  vec4 content = texture(uAtlas, uv);
-  float highlight = smoothstep(-5.0, -0.3, distance) *
-    (1.0 - smoothstep(-0.3, 0.0, distance));
-  vec4 outputColor = content + vec4(vec3(highlight * 0.08), highlight * 0.08);
-  fragColor = vec4(min(outputColor.rgb, vec3(outputColor.a)), outputColor.a);
+  float edge = pow(1.0 - clamp(depth / bevel, 0.0, 1.0), 1.6);
+  float incident = 1.3 * edge;
+  float thickness = uRefraction * (0.75 + 0.25 * abs(normal.x));
+  vec2 direction = normal * thickness / uViewportSize;
+  float separation = 0.025 * uDispersion;
+  float softEdge = 0.65 * edge;
+  // Blue's effective IOR is higher, so its inward displacement is greatest.
+  // All channels share the same normal and converge in the planar interior.
+  vec4 red = sampleSoft(uv - direction * bending(incident, 1.46 - separation), softEdge);
+  vec4 green = sampleSoft(uv - direction * bending(incident, 1.46), softEdge);
+  vec4 blue = sampleSoft(uv - direction * bending(incident, 1.46 + separation), softEdge);
+  float alpha = max(red.a, max(green.a, blue.a));
+  fragColor = vec4(min(vec3(red.r, green.g, blue.b), vec3(alpha)), alpha);
 }

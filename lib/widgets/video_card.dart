@@ -1,3 +1,4 @@
+import '../widgets/cached_image.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -217,7 +218,7 @@ class _VideoCardState extends State<VideoCard> {
                               gaplessPlayback: true,
                             ),
                           if (tmdbMeta?.movie.backdropUrl() != null)
-                            Image.network(
+                            CachedImage(
                               tmdbMeta!.movie.backdropUrl()!,
                               fit: BoxFit.cover,
                               errorBuilder: (_, _, _) =>

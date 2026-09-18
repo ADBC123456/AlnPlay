@@ -127,6 +127,27 @@ class JsonLibraryRepository implements LibraryRepository {
     return _snapshot ??= await _readSnapshot();
   }
 
+  Future<void> clearAll() => _enqueue(() async {
+    const empty = LibrarySnapshot();
+    await _persist(empty);
+    // The recovery copy must not resurrect the deleted catalog on restart.
+    await _persist(empty);
+    final directory = await _indexDirectory();
+    await for (final entity in directory.list(followLinks: false)) {
+      final name = entity.uri.pathSegments.last;
+      if (entity is File &&
+          name.startsWith('source_') &&
+          (name.endsWith('.json') ||
+              name.endsWith('.json.bak') ||
+              name.endsWith('.json.tmp'))) {
+        await entity.delete();
+      }
+    }
+    _rootGenerations.clear();
+    _snapshot = empty;
+    _changes.add(empty);
+  });
+
   @override
   Future<void> applyScanBatch(ScanBatch batch) => _enqueue(() async {
     final current = _snapshot ??= await _readSnapshot();

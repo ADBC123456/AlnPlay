@@ -7,6 +7,7 @@ import '../services/auto_play_store.dart';
 import '../services/badge_prefs.dart';
 import '../services/cache_cleaner.dart';
 import '../services/cache_quota_manager.dart';
+import '../services/image_cache_service.dart';
 import '../widgets/update_settings_tile.dart';
 import '../services/decoder_mode.dart';
 import '../services/exo_player.dart';
@@ -34,6 +35,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   int _diskBytes = 0;
+  int _artworkBytes = 0;
   bool _cleared = false;
   bool _passthrough = false;
   bool _swipeGestures = true;
@@ -536,7 +538,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _refreshDiskSize() async {
     final size = await CacheCleaner.diskSizeBytes();
-    if (mounted) setState(() => _diskBytes = size);
+    final artwork = await ImageCacheService.instance.diskSizeBytes();
+    if (mounted) {
+      setState(() {
+        _diskBytes = size;
+        _artworkBytes = artwork;
+      });
+    }
+  }
+
+  Future<void> _clearArtwork() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const AppText('Clear offline artwork?'),
+        content: const AppText(
+          'Posters, backdrops, episode stills and cast photos will need to be downloaded again. Your library and videos are kept.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const AppText('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const AppText('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await ImageCacheService.instance.clear();
+      CacheCleaner.clearMemoryImages();
+      await _refreshDiskSize();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: AppText('Could not clear cache.')),
+        );
+      }
+    }
   }
 
   Future<void> _pickCacheLimit() async {
@@ -578,7 +620,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _clearCache() async {
-    final totalBytes = _diskBytes + CacheCleaner.memoryBytes();
+    final totalBytes = _diskBytes + _artworkBytes + CacheCleaner.memoryBytes();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -603,6 +645,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (confirmed != true || !mounted) return;
     try {
       await CacheQuotaManager.instance.clear();
+      await ImageCacheService.instance.clear();
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -639,17 +682,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           padding: EdgeInsets.only(
             bottom: 24 + MediaQuery.paddingOf(context).bottom,
           ),
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: AppText(
-                'General',
-                style: theme.textTheme.titleSmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+          children: _settingsGroups([
+            _SettingsHeading('General'),
             TvTile(
               leading: const Icon(Icons.language),
               title: const AppText('Language'),
@@ -660,16 +694,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const UpdateSettingsTile(),
             const Divider(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: AppText(
-                'Appearance',
-                style: theme.textTheme.titleSmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+            _SettingsHeading('Appearance'),
             ListenableBuilder(
               listenable: AppThemeController.instance,
               builder: (context, _) => TvTile(
@@ -682,16 +707,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             const Divider(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: AppText(
-                'Storage',
-                style: theme.textTheme.titleSmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+            _SettingsHeading('Storage'),
             TvTile(
               leading: const Icon(Icons.cleaning_services),
               title: const AppText('Clear cache'),
@@ -713,24 +729,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: Text(
                     '${CacheCleaner.formatBytes(quota.usedBytes)} / '
                     '${quota.limitBytes == 0 ? context.tr('Unlimited') : CacheCleaner.formatBytes(quota.limitBytes)}\n'
-                    '${context.tr(quota.overLimit ? 'Active playback files will be cleared after playback.' : 'Limits temporary files, images and danmaku; keeps your library and watch history.')}',
+                    '${context.tr(quota.overLimit ? 'Active playback files will be cleared after playback.' : 'Limits temporary files and danmaku; offline artwork is managed separately.')}',
                   ),
                   onTap: _pickCacheLimit,
                 );
               },
             ),
+            TvTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const AppText('Offline artwork'),
+              subtitle: Text(
+                '${CacheCleaner.formatBytes(_artworkBytes)} · ${context.tr('Kept until manually cleared')}',
+              ),
+              onTap: _clearArtwork,
+            ),
             if (defaultTargetPlatform == TargetPlatform.android) ...[
               const Divider(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: AppText(
-                  'Audio',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+              _SettingsHeading('Audio'),
               SwitchListTile(
                 secondary: const Icon(Icons.surround_sound),
                 title: const AppText('Audio passthrough'),
@@ -749,16 +764,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
             if (!isTv) ...[
               const Divider(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: AppText(
-                  'Player',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+              _SettingsHeading('Player'),
               SwitchListTile(
                 secondary: const Icon(Icons.swipe),
                 title: const AppText('Swipe gestures'),
@@ -1031,17 +1037,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
             ],
             const Divider(),
-            Padding(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: AppText(
-                'Danmaku',
-                style: TextStyle(
-                  color: Colors.purpleAccent,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
-            ),
+            _SettingsHeading('Danmaku'),
             TvTile(
               leading: const Icon(Icons.forum_outlined),
               title: const AppText('Danmaku settings'),
@@ -1055,17 +1051,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             // Subtitles — OpenSubtitles (Nova-style): anonymous 5/day, free login 20/day
             const Divider(),
-            Padding(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: AppText(
-                'Metadata',
-                style: TextStyle(
-                  color: Colors.purpleAccent,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
-            ),
+            _SettingsHeading('Metadata'),
             TvTile(
               leading: const Icon(Icons.movie),
               title: const AppText('TMDB API key'),
@@ -1077,17 +1063,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               onTap: _editTmdbKey,
             ),
             const Divider(),
-            Padding(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: AppText(
-                'Subtitles',
-                style: TextStyle(
-                  color: Colors.purpleAccent,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
-            ),
+            _SettingsHeading('Subtitles'),
             TvTile(
               leading: const Icon(Icons.subtitles),
               title: const AppText('OpenSubtitles'),
@@ -1136,16 +1112,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             if (simklClientId.isNotEmpty) ...[
               const Divider(),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: AppText(
-                  'SIMKL',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+              _SettingsHeading('SIMKL'),
               if (_simklConnected) ...[
                 TvTile(
                   leading: const Icon(Icons.sync),
@@ -1181,7 +1148,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onTap: _connectSimkl,
                 ),
             ],
-          ],
+          ]),
         ),
       ),
     );
@@ -1340,6 +1307,45 @@ class _SimklConnectDialogState extends State<_SimklConnectDialog> {
       ],
     );
   }
+}
+
+class _SettingsHeading extends StatelessWidget {
+  const _SettingsHeading(this.title);
+  final String title;
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+List<Widget> _settingsGroups(List<Widget> items) {
+  final sections = <Widget>[];
+  String? heading;
+  var children = <Widget>[];
+  void finish() {
+    if (heading == null) return;
+    sections.add(
+      ExpansionTile(
+        key: PageStorageKey('settings:$heading'),
+        title: AppText(heading),
+        initiallyExpanded: true,
+        maintainState: true,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        children: children,
+      ),
+    );
+    children = [];
+  }
+
+  for (final item in items) {
+    if (item is _SettingsHeading) {
+      finish();
+      heading = item.title;
+    } else if (item is! Divider) {
+      children.add(item);
+    }
+  }
+  finish();
+  return sections;
 }
 
 /// Compact badge toggle row — icon + label + optional subtitle + switch.

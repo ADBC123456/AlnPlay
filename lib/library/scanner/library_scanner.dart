@@ -51,6 +51,10 @@ class CoordinatedLibraryScanner implements LibraryScanner {
       StreamController<ScanProgress>.broadcast();
   final Set<String> _cancelled = {};
   int _generationCounter = 0;
+  bool _cancelAll = false;
+
+  /// Stops running and queued roots; this scanner instance is not reused.
+  void cancelAll() => _cancelAll = true;
 
   @override
   Stream<ScanProgress> get progress => _progress.stream;
@@ -78,11 +82,12 @@ class CoordinatedLibraryScanner implements LibraryScanner {
   }
 
   Future<void> _runSourceGroups(Queue<List<LibraryRoot>> groups) async {
-    while (groups.isNotEmpty) {
+    while (groups.isNotEmpty && !_cancelAll) {
       final roots = groups.removeFirst();
       // Roots for one source stay sequential so native clients do not receive
       // overlapping directory requests for the same authenticated server.
       for (final root in roots) {
+        if (_cancelAll) break;
         await _refreshRoot(root);
       }
     }
@@ -253,7 +258,11 @@ class CoordinatedLibraryScanner implements LibraryScanner {
             final task = metadataResolver.resolve(file, context).then((
               result,
             ) async {
-              if (!acceptingMetadata || _cancelled.contains(root.id)) return;
+              if (!acceptingMetadata ||
+                  _cancelAll ||
+                  _cancelled.contains(root.id)) {
+                return;
+              }
               staged.add(result);
               if (staged.length >= batchSize ||
                   _clock().difference(lastFlush) >= batchInterval) {
@@ -331,7 +340,7 @@ class CoordinatedLibraryScanner implements LibraryScanner {
   void cancel(String scanId) => _cancelled.add(scanId);
 
   void _checkCancelled(String rootId) {
-    if (_cancelled.contains(rootId)) throw const _ScanCancelled();
+    if (_cancelAll || _cancelled.contains(rootId)) throw const _ScanCancelled();
   }
 
   static String _canonicalDirectory(SourceDirectory directory) =>

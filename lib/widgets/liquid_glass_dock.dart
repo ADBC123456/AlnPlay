@@ -1,10 +1,19 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
+import 'package:flutter/physics.dart';
+import 'package:flutter/rendering.dart';
 
-/// Root navigation with a draggable refracting lens and a separate search.
+Size _lensScale(double position, double pressure, bool reduceMotion) => Size(
+  1 +
+      .12 * pressure +
+      (reduceMotion ? 0 : .04 * math.sin((position % 1) * math.pi).abs()),
+  1 + .22 * pressure,
+);
+
+/// Root navigation with a movable glass lens and a separate search action.
 class LiquidGlassDock extends StatefulWidget {
   const LiquidGlassDock({
     super.key,
@@ -33,7 +42,7 @@ class LiquidGlassDock extends StatefulWidget {
 }
 
 class _LiquidGlassDockState extends State<LiquidGlassDock>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   static const _icons = [
     Icons.video_library_outlined,
     Icons.folder_outlined,
@@ -44,134 +53,143 @@ class _LiquidGlassDockState extends State<LiquidGlassDock>
     Icons.folder_rounded,
     Icons.person_rounded,
   ];
-  static Future<ui.FragmentProgram>? _program;
+  static final _spring = SpringDescription.withDampingRatio(
+    mass: 1,
+    stiffness: 420,
+    ratio: .85,
+  );
 
-  final _atlasKey = GlobalKey();
-  ui.Image? _atlas;
-  Size? _atlasLogicalSize;
-  ui.FragmentShader? _shader;
-  late final AnimationController _settle;
-  Animation<double>? _settleAnimation;
-  double? _lensX;
-  double? _dragStartX;
-  double? _dragStartLensX;
+  // Slot coordinates survive window resizing without a pixel-position jump.
+  late final _position = AnimationController.unbounded(
+    vsync: this,
+    value: widget.selectedIndex.toDouble(),
+  );
+  late final _pressure = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 120),
+  );
+  final _lightX = ValueNotifier<double>(.32);
+  late final Listenable _motion = Listenable.merge([
+    _position,
+    _pressure,
+    _lightX,
+  ]);
   bool _dragging = false;
-  bool _pressed = false;
-  bool _captureQueued = false;
-  int? _pendingExternalIndex;
+  bool _externalSelectionPending = false;
+  bool _reduceMotion = false;
+  int? _pointer;
+  int? _settlingTarget;
+  double _slotWidth = 1;
 
   @override
   void initState() {
     super.initState();
-    _settle =
-        AnimationController(
-          vsync: this,
-          duration: const Duration(milliseconds: 220),
-        )..addListener(() {
-          if (_settleAnimation != null) {
-            setState(() => _lensX = _settleAnimation!.value);
-          }
-        });
-    if (ui.ImageFilter.isShaderFilterSupported) _loadShader();
-  }
-
-  Future<void> _loadShader() async {
-    try {
-      final program = await (_program ??= ui.FragmentProgram.fromAsset(
-        'shaders/liquid_glass.frag',
-      ));
-      if (!mounted) return;
-      setState(() => _shader = program.fragmentShader());
-      _queueCapture();
-    } catch (_) {
-      // Navigation remains functional with the plain selected glass pill.
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant LiquidGlassDock oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.selectedIndex != widget.selectedIndex ||
-        oldWidget.labels != widget.labels) {
-      _invalidateAtlas();
-      _queueCapture();
-      if (_dragging) _pendingExternalIndex = widget.selectedIndex;
-    }
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _invalidateAtlas();
-    _queueCapture();
+    _reduceMotion = MediaQuery.disableAnimationsOf(context);
+    if (_reduceMotion) _resetInteraction();
   }
 
-  void _invalidateAtlas() {
-    final old = _atlas;
-    _atlas = null;
-    _atlasLogicalSize = null;
-    if (old != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+  @override
+  void didUpdateWidget(covariant LiquidGlassDock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedIndex != widget.selectedIndex) {
+      if (_dragging) {
+        _externalSelectionPending = true;
+      } else {
+        _settle(widget.selectedIndex);
+      }
     }
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) _resetInteraction();
+  }
+
+  @override
   void dispose() {
-    _settle.dispose();
-    _shader?.dispose();
-    _atlas?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _position.dispose();
+    _pressure.dispose();
+    _lightX.dispose();
     super.dispose();
   }
 
-  /// Captures only the small, local icon/text layer when its content changes.
-  /// It never snapshots the scrolling page and is not run for drag frames.
-  void _queueCapture() {
-    if (_captureQueued || _shader == null) return;
-    _captureQueued = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      _captureQueued = false;
-      if (!mounted) return;
-      final object = _atlasKey.currentContext?.findRenderObject();
-      // `debugNeedsPaint` is initialized inside an assert in Flutter's
-      // RenderObject implementation. Reading it in a release build throws a
-      // LateInitializationError, including on iOS. A post-frame callback is
-      // already after paint; if the boundary still cannot be captured,
-      // `toImage` fails into the safe fallback below.
-      if (object is! RenderRepaintBoundary) {
-        _queueCapture();
-        return;
-      }
-      try {
-        final image = await object.toImage(
-          pixelRatio: MediaQuery.devicePixelRatioOf(context),
-        );
-        if (!mounted) {
-          image.dispose();
-          return;
-        }
-        final old = _atlas;
-        setState(() {
-          _atlas = image;
-          _atlasLogicalSize = object.size;
-        });
-        old?.dispose();
-      } catch (_) {
-        // Widget tests and older renderers keep the non-refracting fallback.
-      }
-    });
-  }
-
-  void _animateTo(double target, bool reduceMotion) {
-    _settle.stop();
-    if (reduceMotion || _lensX == null) {
-      setState(() => _lensX = target);
+  void _settle(int target, {double velocity = 0}) {
+    // A parent's selection acknowledgement must not erase release velocity.
+    if (_position.isAnimating && _settlingTarget == target) return;
+    _settlingTarget = target;
+    _position.stop();
+    if (_reduceMotion ||
+        ((_position.value - target).abs() < .001 && velocity.abs() < .001)) {
+      _position.value = target.toDouble();
       return;
     }
-    _settleAnimation = Tween<double>(
-      begin: _lensX!,
-      end: target,
-    ).animate(CurvedAnimation(parent: _settle, curve: Curves.easeOutCubic));
-    _settle.forward(from: 0);
+    _position.animateWith(
+      SpringSimulation(
+        _spring,
+        _position.value,
+        target.toDouble(),
+        velocity.clamp(-12, 12),
+        tolerance: const Tolerance(distance: .001, velocity: .001),
+        snapToEnd: true,
+      ),
+    );
+  }
+
+  void _releasePressure() {
+    if (_reduceMotion) {
+      _pressure.value = 0;
+    } else {
+      _pressure.reverse();
+    }
+  }
+
+  void _resetInteraction() {
+    _pointer = null;
+    _dragging = false;
+    _externalSelectionPending = false;
+    _settlingTarget = null;
+    _pressure.value = 0;
+    _lightX.value = .32;
+    _position.value = widget.selectedIndex.toDouble();
+  }
+
+  void _cancelInteraction() {
+    _pointer = null;
+    _dragging = false;
+    _externalSelectionPending = false;
+    _releasePressure();
+    _settle(widget.selectedIndex);
+  }
+
+  void _select(int index) {
+    _settle(index);
+    widget.onDestinationSelected(index);
+  }
+
+  void _endDrag(DragEndDetails details) {
+    if (!_dragging) return;
+    final velocity = details.velocity.pixelsPerSecond.dx * .9 / _slotWidth;
+    final target = _externalSelectionPending
+        ? widget.selectedIndex
+        : (_position.value + (velocity * .06).clamp(-.45, .45)).round().clamp(
+            0,
+            2,
+          );
+    _dragging = false;
+    _pointer = null;
+    _externalSelectionPending = false;
+    _releasePressure();
+    _settle(target, velocity: velocity);
+    if (target != widget.selectedIndex) {
+      widget.onDestinationSelected(target);
+    }
   }
 
   @override
@@ -190,139 +208,213 @@ class _LiquidGlassDockState extends State<LiquidGlassDock>
             children: [
               Expanded(
                 child: _GlassSurface(
+                  backdropClipper: _DockLensCutout(
+                    position: _position,
+                    pressure: _pressure,
+                    motion: _motion,
+                    reduceMotion: _reduceMotion,
+                  ),
                   child: LayoutBuilder(
                     builder: (context, constraints) {
                       const inset = 5.0;
-                      final usable = constraints.maxWidth - inset * 2;
-                      final slot = usable / 3;
-                      final selectedCenter =
-                          inset + slot * (widget.selectedIndex + .5);
-                      if (!_dragging &&
-                          !_settle.isAnimating &&
-                          (_lensX == null ||
-                              (_lensX! - selectedCenter).abs() > .5)) {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (mounted && !_dragging) {
-                            _animateTo(selectedCenter, media.disableAnimations);
-                          }
-                        });
-                      }
-                      final center = (_lensX ?? selectedCenter).clamp(
-                        inset + slot / 2,
-                        constraints.maxWidth - inset - slot / 2,
-                      );
-                      final atlasReady =
-                          _shader != null &&
-                          _atlas != null &&
-                          _atlasLogicalSize != null &&
-                          (_atlasLogicalSize!.width - usable).abs() < .5 &&
-                          (_atlasLogicalSize!.height -
-                                      (constraints.maxHeight - inset * 2))
-                                  .abs() <
-                              .5;
+                      final slot = (constraints.maxWidth - inset * 2) / 3;
+                      _slotWidth = slot;
                       return Listener(
-                        behavior: HitTestBehavior.opaque,
                         onPointerDown: (event) {
-                          _settle.stop();
-                          setState(() {
-                            _pressed = true;
-                            _dragging = false;
-                            _dragStartX = event.localPosition.dx;
-                            _dragStartLensX = center;
-                          });
+                          if (_pointer != null) return;
+                          _pointer = event.pointer;
+                          _position.stop();
+                          _lightX.value =
+                              ((event.localPosition.dx - inset) / slot -
+                                      _position.value)
+                                  .clamp(0, 1);
+                          if (!_reduceMotion) _pressure.forward();
                         },
                         onPointerMove: (event) {
-                          final start = _dragStartX;
-                          if (start == null) return;
-                          final delta = event.localPosition.dx - start;
-                          if (!_dragging && delta.abs() <= 8) return;
-                          setState(() {
-                            _dragging = true;
-                            _lensX = (_dragStartLensX! + delta).clamp(
-                              inset + slot / 2,
-                              constraints.maxWidth - inset - slot / 2,
-                            );
-                          });
+                          if (_pointer != event.pointer || _reduceMotion) {
+                            return;
+                          }
+                          _lightX.value =
+                              ((event.localPosition.dx - inset) / slot -
+                                      _position.value)
+                                  .clamp(0, 1);
                         },
                         onPointerUp: (event) {
-                          final wasDragging = _dragging;
-                          setState(() {
-                            _pressed = false;
-                            _dragging = false;
-                            _dragStartX = null;
-                          });
-                          // A normal tap is committed by InkWell so keyboard
-                          // activation and focus semantics use the same path.
-                          if (!wasDragging) return;
-                          final hit = (((_lensX ?? center) - inset) / slot)
-                              .floor()
-                              .clamp(0, 2);
-                          final target = _pendingExternalIndex ?? hit;
-                          _pendingExternalIndex = null;
-                          _animateTo(
-                            inset + slot * (target + .5),
-                            media.disableAnimations,
-                          );
-                          if (target != widget.selectedIndex) {
-                            widget.onDestinationSelected(target);
-                          }
+                          if (_pointer != event.pointer) return;
+                          _pointer = null;
+                          _releasePressure();
                         },
-                        onPointerCancel: (_) {
-                          setState(() {
-                            _pressed = false;
-                            _dragging = false;
-                            _dragStartX = null;
-                          });
-                          _animateTo(selectedCenter, media.disableAnimations);
+                        onPointerCancel: (event) {
+                          if (_pointer == event.pointer) _cancelInteraction();
                         },
-                        child: Padding(
-                          padding: const EdgeInsets.all(inset),
-                          child: Stack(
-                            children: [
-                              if (!atlasReady)
-                                _SelectionLens(
-                                  left: center - inset - slot / 2,
-                                  width: slot,
-                                  height: height,
-                                  colors: colors,
-                                  pressed: _pressed,
-                                ),
-                              RepaintBoundary(
-                                key: _atlasKey,
-                                child: _DestinationRow(
-                                  labels: widget.labels,
-                                  selectedIndex: widget.selectedIndex,
-                                  onSelected: widget.onDestinationSelected,
-                                  icons: _icons,
-                                  selectedIcons: _selectedIcons,
-                                ),
-                              ),
-                              // Cover the undisplaced glyph inside the lens,
-                              // then restore only its refracted atlas sample.
-                              // This ordering prevents a doubled/ghost icon.
-                              if (atlasReady)
-                                _SelectionLens(
-                                  left: center - inset - slot / 2,
-                                  width: slot,
-                                  height: height,
-                                  colors: colors,
-                                  pressed: _pressed,
-                                ),
-                              if (atlasReady)
-                                Positioned.fill(
-                                  child: IgnorePointer(
-                                    child: CustomPaint(
-                                      painter: _LensPainter(
-                                        shader: _shader!,
-                                        atlas: _atlas!,
-                                        lensCenter: center - inset,
-                                        lensWidth: slot,
-                                        pressed: _pressed,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          dragStartBehavior: DragStartBehavior.down,
+                          onHorizontalDragStart: (_) {
+                            _position.stop();
+                            _dragging = true;
+                          },
+                          onHorizontalDragUpdate: (details) {
+                            if (!_dragging) return;
+                            _position.value =
+                                (_position.value + details.delta.dx * .9 / slot)
+                                    .clamp(0, 2);
+                          },
+                          onHorizontalDragEnd: _endDrag,
+                          onHorizontalDragCancel: _cancelInteraction,
+                          child: Padding(
+                            padding: const EdgeInsets.all(inset),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              clipBehavior: Clip.none,
+                              children: [
+                                AnimatedBuilder(
+                                  animation: _motion,
+                                  builder: (context, _) {
+                                    final pressure = _pressure.value;
+                                    final scale = _lensScale(
+                                      _position.value,
+                                      pressure,
+                                      _reduceMotion,
+                                    );
+                                    return Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Transform.translate(
+                                        offset: Offset(
+                                          _position.value.clamp(-.08, 2.08) *
+                                              slot,
+                                          0,
+                                        ),
+                                        child: Transform.scale(
+                                          scaleX: scale.width,
+                                          scaleY: scale.height,
+                                          child: SizedBox(
+                                            key: const Key(
+                                              'dock-selection-lens',
+                                            ),
+                                            width: slot,
+                                            height: height - inset * 2,
+                                            child: _GlassSurface(
+                                              lens: true,
+                                              pressure: pressure,
+                                              lightX: _lightX.value,
+                                              child: const SizedBox.expand(),
+                                            ),
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  ),
+                                    );
+                                  },
                                 ),
-                            ],
+                                Row(
+                                  children: List.generate(3, (index) {
+                                    final selected =
+                                        index == widget.selectedIndex;
+                                    final color = selected
+                                        ? colors.onSurface
+                                        : colors.onSurfaceVariant;
+                                    return Expanded(
+                                      child: Semantics(
+                                        selected: selected,
+                                        button: true,
+                                        label: widget.labels[index],
+                                        onTap: () => _select(index),
+                                        child: ExcludeSemantics(
+                                          child: Tooltip(
+                                            message: widget.labels[index],
+                                            child: InkWell(
+                                              borderRadius:
+                                                  BorderRadius.circular(100),
+                                              splashFactory:
+                                                  NoSplash.splashFactory,
+                                              overlayColor:
+                                                  WidgetStateProperty.resolveWith(
+                                                    (states) =>
+                                                        states.contains(
+                                                          WidgetState.focused,
+                                                        )
+                                                        ? colors.onSurface
+                                                              .withValues(
+                                                                alpha: .12,
+                                                              )
+                                                        : Colors.transparent,
+                                                  ),
+                                              onTap: () => _select(index),
+                                              child: AnimatedBuilder(
+                                                animation: _motion,
+                                                builder: (context, child) {
+                                                  final delta =
+                                                      index - _position.value;
+                                                  final proximity =
+                                                      (1 - delta.abs()).clamp(
+                                                        0,
+                                                        1,
+                                                      );
+                                                  return Transform.translate(
+                                                    offset: Offset(
+                                                      delta.sign *
+                                                          proximity *
+                                                          _pressure.value *
+                                                          5,
+                                                      0,
+                                                    ),
+                                                    child: child,
+                                                  );
+                                                },
+                                                child: Center(
+                                                  child: Column(
+                                                    mainAxisSize:
+                                                        MainAxisSize.min,
+                                                    children: [
+                                                      Icon(
+                                                        selected
+                                                            ? _selectedIcons[index]
+                                                            : _icons[index],
+                                                        size: 24,
+                                                        color: color,
+                                                      ),
+                                                      const SizedBox(height: 2),
+                                                      Padding(
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              horizontal: 3,
+                                                            ),
+                                                        child: Text(
+                                                          widget.labels[index],
+                                                          maxLines: 1,
+                                                          overflow: TextOverflow
+                                                              .ellipsis,
+                                                          textScaler: media
+                                                              .textScaler
+                                                              .clamp(
+                                                                maxScaleFactor:
+                                                                    2,
+                                                              ),
+                                                          style: TextStyle(
+                                                            fontSize: 12,
+                                                            height: 1.15,
+                                                            fontWeight: selected
+                                                                ? FontWeight
+                                                                      .w600
+                                                                : FontWeight
+                                                                      .w400,
+                                                            color: color,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       );
@@ -334,6 +426,7 @@ class _LiquidGlassDockState extends State<LiquidGlassDock>
               SizedBox.square(
                 dimension: 64,
                 child: _GlassSurface(
+                  circular: true,
                   child: Semantics(
                     button: true,
                     selected: widget.searchActive,
@@ -369,209 +462,356 @@ class _LiquidGlassDockState extends State<LiquidGlassDock>
   }
 }
 
-class _SelectionLens extends StatelessWidget {
-  const _SelectionLens({
-    required this.left,
-    required this.width,
-    required this.height,
-    required this.colors,
-    required this.pressed,
+/// Shader instances have separate uniforms; only their program is shared.
+class _GlassSurface extends StatefulWidget {
+  const _GlassSurface({
+    required this.child,
+    this.circular = false,
+    this.lens = false,
+    this.pressure = 0,
+    this.lightX = .32,
+    this.backdropClipper,
   });
-  final double left;
-  final double width;
-  final double height;
-  final ColorScheme colors;
-  final bool pressed;
-
-  @override
-  Widget build(BuildContext context) => Positioned(
-    left: left,
-    top: 0,
-    width: width,
-    bottom: 0,
-    child: DecoratedBox(
-      key: const Key('dock-selection-lens'),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(height),
-        color: colors.surface.withValues(alpha: pressed ? .99 : .97),
-        border: Border.all(
-          color: colors.onSurface.withValues(alpha: pressed ? .15 : .09),
-        ),
-      ),
-    ),
-  );
-}
-
-class _DestinationRow extends StatelessWidget {
-  const _DestinationRow({
-    required this.labels,
-    required this.selectedIndex,
-    required this.onSelected,
-    required this.icons,
-    required this.selectedIcons,
-  });
-  final List<String> labels;
-  final int selectedIndex;
-  final ValueChanged<int> onSelected;
-  final List<IconData> icons;
-  final List<IconData> selectedIcons;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Row(
-      children: List.generate(3, (index) {
-        final selected = index == selectedIndex;
-        return Expanded(
-          child: Semantics(
-            selected: selected,
-            button: true,
-            label: labels[index],
-            onTap: () => onSelected(index),
-            child: ExcludeSemantics(
-              child: Tooltip(
-                message: labels[index],
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(100),
-                  overlayColor: const WidgetStatePropertyAll(
-                    Colors.transparent,
-                  ),
-                  splashFactory: NoSplash.splashFactory,
-                  onTap: () => onSelected(index),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          selected ? selectedIcons[index] : icons[index],
-                          size: 24,
-                          color: selected
-                              ? colors.onSurface
-                              : colors.onSurfaceVariant,
-                        ),
-                        const SizedBox(height: 2),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 3),
-                          child: Text(
-                            labels[index],
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textScaler: MediaQuery.textScalerOf(
-                              context,
-                            ).clamp(maxScaleFactor: 2),
-                            style: TextStyle(
-                              fontSize: 12,
-                              height: 1.15,
-                              fontWeight: selected
-                                  ? FontWeight.w600
-                                  : FontWeight.w400,
-                              color: selected
-                                  ? colors.onSurface
-                                  : colors.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      }),
-    );
-  }
-}
-
-class _LensPainter extends CustomPainter {
-  const _LensPainter({
-    required this.shader,
-    required this.atlas,
-    required this.lensCenter,
-    required this.lensWidth,
-    required this.pressed,
-  });
-  final ui.FragmentShader shader;
-  final ui.Image atlas;
-  final double lensCenter;
-  final double lensWidth;
-  final bool pressed;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    shader
-      ..setFloat(0, size.width)
-      ..setFloat(1, size.height)
-      ..setFloat(2, lensCenter)
-      ..setFloat(3, size.height / 2)
-      ..setFloat(4, lensWidth)
-      ..setFloat(5, size.height)
-      ..setFloat(6, pressed ? 1 : 0)
-      ..setImageSampler(0, atlas);
-    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
-  }
-
-  @override
-  bool shouldRepaint(covariant _LensPainter oldDelegate) =>
-      oldDelegate.atlas != atlas ||
-      oldDelegate.lensCenter != lensCenter ||
-      oldDelegate.lensWidth != lensWidth ||
-      oldDelegate.pressed != pressed;
-}
-
-class _GlassSurface extends StatelessWidget {
-  const _GlassSurface({required this.child});
   final Widget child;
+  final bool circular;
+  final bool lens;
+  final double pressure;
+  final double lightX;
+  final CustomClipper<Path>? backdropClipper;
+
+  @override
+  State<_GlassSurface> createState() => _GlassSurfaceState();
+}
+
+class _GlassSurfaceState extends State<_GlassSurface> {
+  static Future<ui.FragmentProgram>? _program;
+  static final _lensBlur = ui.ImageFilter.blur(
+    sigmaX: .6,
+    sigmaY: .6,
+    tileMode: TileMode.clamp,
+  );
+  static final _dockBlur = ui.ImageFilter.blur(
+    sigmaX: 18,
+    sigmaY: 18,
+    tileMode: TileMode.clamp,
+  );
+  ui.FragmentShader? _shader;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.lens && ui.ImageFilter.isShaderFilterSupported) _loadShader();
+  }
+
+  Future<void> _loadShader() async {
+    try {
+      final program = await (_program ??= ui.FragmentProgram.fromAsset(
+        'shaders/liquid_glass.frag',
+      ));
+      if (mounted) setState(() => _shader = program.fragmentShader());
+    } catch (_) {
+      // Unsupported backends and asset failures retain live uniform blur.
+    }
+  }
+
+  @override
+  void dispose() {
+    _shader?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final highContrast = MediaQuery.highContrastOf(context);
-    final radius = BorderRadius.circular(100);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: radius,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: dark ? .25 : .13),
-            blurRadius: 22,
-            offset: const Offset(0, 7),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        final shader = _shader;
+        final baseBlur = widget.lens ? _lensBlur : _dockBlur;
+        final material = CustomPaint(
+          painter: _GlassEdgePainter(
+            dark: dark,
+            highContrast: highContrast,
+            circular: widget.circular,
+            lens: widget.lens,
+            pressure: widget.pressure,
+            lightX: widget.lightX,
           ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: radius,
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(
-            sigmaX: 18,
-            sigmaY: 18,
-            tileMode: TileMode.clamp,
+          child: const SizedBox.expand(),
+        );
+        final filtered = shader != null && !highContrast
+            ? _GlassBackdrop(
+                shader: shader,
+                baseBlur: baseBlur,
+                viewport: MediaQuery.sizeOf(context),
+                dispersion: 1,
+                refraction: 6 + widget.pressure * 4,
+                child: material,
+              )
+            : BackdropFilter(
+                filter: baseBlur,
+                enabled: !highContrast,
+                child: material,
+              );
+        final clipped = widget.backdropClipper != null && !highContrast
+            ? ClipPath(clipper: widget.backdropClipper, child: filtered)
+            : filtered;
+        final background = DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(size.height / 2),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(
+                  alpha: widget.lens
+                      ? .08 + widget.pressure * .08
+                      : (dark ? .20 : .10),
+                ),
+                blurRadius: widget.lens ? 10 + widget.pressure * 8 : 18,
+                offset: Offset(0, widget.lens ? 2 + widget.pressure * 3 : 6),
+              ),
+            ],
           ),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: radius,
-              color: (dark ? const Color(0xFF202024) : Colors.white).withValues(
-                alpha: highContrast ? .96 : (dark ? .62 : .54),
-              ),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: dark ? .16 : .65),
-                width: .8,
-              ),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.white.withValues(alpha: .08),
-                  Colors.white.withValues(alpha: 0),
-                  Colors.white.withValues(alpha: dark ? .03 : .09),
-                ],
-              ),
-            ),
-            child: Material(type: MaterialType.transparency, child: child),
-          ),
-        ),
-      ),
+          child: widget.circular
+              ? ClipOval(child: clipped)
+              : ClipRSuperellipse(
+                  borderRadius: BorderRadius.circular(size.height / 2),
+                  child: clipped,
+                ),
+        );
+        // Only the material is clipped. The active lens can grow beyond the
+        // dock without changing any button's layout or touch target.
+        return Stack(
+          fit: StackFit.expand,
+          clipBehavior: Clip.none,
+          children: [
+            background,
+            Material(type: MaterialType.transparency, child: widget.child),
+          ],
+        );
+      },
     );
   }
+}
+
+/// Keep frosting around the lens, allowing its inward samples to see the page
+/// rather than refracting an already heavily blurred intermediate surface.
+class _DockLensCutout extends CustomClipper<Path> {
+  _DockLensCutout({
+    required this.position,
+    required this.pressure,
+    required Listenable motion,
+    required this.reduceMotion,
+  }) : super(reclip: motion);
+  final Animation<double> position;
+  final Animation<double> pressure;
+  final bool reduceMotion;
+
+  @override
+  Path getClip(Size size) {
+    const inset = 5.0;
+    final slot = (size.width - inset * 2) / 3;
+    final height = size.height - inset * 2;
+    final scale = _lensScale(position.value, pressure.value, reduceMotion);
+    final lens = Path()
+      ..addRSuperellipse(
+        ui.RSuperellipse.fromRectAndRadius(
+          Rect.fromLTWH(0, 0, slot, height),
+          Radius.circular(height / 2),
+        ),
+      );
+    final transform = Matrix4.diagonal3Values(scale.width, scale.height, 1)
+      ..setTranslationRaw(
+        inset +
+            position.value.clamp(-.08, 2.08) * slot +
+            slot * (1 - scale.width) / 2,
+        inset + height * (1 - scale.height) / 2,
+        0,
+      );
+    return Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(Offset.zero & size)
+      ..addPath(lens.transform(transform.storage), Offset.zero);
+  }
+
+  @override
+  bool shouldReclip(covariant _DockLensCutout oldClipper) =>
+      oldClipper.position != position ||
+      oldClipper.pressure != pressure ||
+      oldClipper.reduceMotion != reduceMotion;
+}
+
+/// Runtime backdrop filters sample the scene texture, not a widget-sized image.
+/// Resolve the glass's screen rect during paint, after drag transforms/layout.
+class _GlassBackdrop extends SingleChildRenderObjectWidget {
+  const _GlassBackdrop({
+    required this.shader,
+    required this.baseBlur,
+    required this.viewport,
+    required this.dispersion,
+    required this.refraction,
+    required super.child,
+  });
+  final ui.FragmentShader shader;
+  final ui.ImageFilter baseBlur;
+  final Size viewport;
+  final double dispersion;
+  final double refraction;
+
+  @override
+  _RenderGlassBackdrop createRenderObject(BuildContext context) =>
+      _RenderGlassBackdrop(this);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderGlassBackdrop renderObject,
+  ) {
+    renderObject.configuration = this;
+    renderObject.markNeedsPaint();
+  }
+}
+
+class _RenderGlassBackdrop extends RenderProxyBox {
+  _RenderGlassBackdrop(this.configuration);
+  _GlassBackdrop configuration;
+  final _backdropLayer = LayerHandle<BackdropFilterLayer>();
+
+  @override
+  bool get alwaysNeedsCompositing => child != null;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    if (child == null) return;
+    final rect = MatrixUtils.transformRect(
+      getTransformTo(null),
+      Offset.zero & size,
+    );
+    final config = configuration;
+    config.shader
+      ..setFloat(2, rect.width)
+      ..setFloat(3, rect.height)
+      ..setFloat(4, config.dispersion)
+      ..setFloat(5, config.refraction)
+      ..setFloat(6, rect.left)
+      ..setFloat(7, rect.top)
+      ..setFloat(8, config.viewport.width)
+      ..setFloat(9, config.viewport.height);
+    final layer = _backdropLayer.layer ??= BackdropFilterLayer();
+    layer.filter = ui.ImageFilter.compose(
+      outer: ui.ImageFilter.shader(config.shader),
+      inner: config.baseBlur,
+    );
+    context.pushLayer(layer, super.paint, offset);
+  }
+
+  @override
+  void dispose() {
+    _backdropLayer.layer = null;
+    super.dispose();
+  }
+}
+
+class _GlassEdgePainter extends CustomPainter {
+  const _GlassEdgePainter({
+    required this.dark,
+    required this.highContrast,
+    this.lens = false,
+    this.pressure = 0,
+    this.circular = false,
+    this.lightX = .32,
+  });
+  final bool dark;
+  final bool highContrast;
+  final bool lens;
+  final double pressure;
+  final bool circular;
+  final double lightX;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = (Offset.zero & size).deflate(.6);
+    final path = Path();
+    if (circular) {
+      path.addOval(rect);
+    } else {
+      path.addRSuperellipse(
+        ui.RSuperellipse.fromRectAndRadius(
+          rect,
+          Radius.circular(rect.height / 2),
+        ),
+      );
+    }
+    final tint = highContrast && !lens
+        ? (dark ? const Color(0xFF252528) : const Color(0xFFF4F4F6))
+        : lens
+        ? Colors.white.withValues(alpha: dark ? .06 : .14)
+        : (dark ? const Color(0xFF171719) : Colors.white).withValues(
+            alpha: dark ? .18 : .12,
+          );
+    canvas.drawPath(path, Paint()..color = tint);
+    if (lens) {
+      canvas.save();
+      canvas.clipPath(path);
+      canvas.drawPath(
+        path.shift(const Offset(0, -.8)),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.6
+          ..color = Colors.black.withValues(alpha: .10 + pressure * .04),
+      );
+      canvas.restore();
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: (lens ? .13 : .10) + pressure * .07),
+            Colors.white.withValues(alpha: .015),
+            Colors.white.withValues(alpha: lens ? .04 : .025),
+          ],
+          stops: const [0, .55, 1],
+        ).createShader(rect),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = (dark ? Colors.white : Colors.black).withValues(
+          alpha: highContrast ? .5 : (lens ? .11 : .22),
+        ),
+    );
+    // Fade the curved reflection at both ends, rather than drawing a white rule.
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(0, 0, size.width, size.height * .52));
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..shader = LinearGradient(
+          colors: [
+            Colors.white.withValues(alpha: 0),
+            Colors.white.withValues(alpha: .5 + pressure * .15),
+            Colors.white.withValues(alpha: .22),
+            Colors.white.withValues(alpha: 0),
+          ],
+          stops: [0, lightX.clamp(.15, .7), (lightX + .3).clamp(.45, .95), 1],
+        ).createShader(rect),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _GlassEdgePainter oldDelegate) =>
+      oldDelegate.dark != dark ||
+      oldDelegate.highContrast != highContrast ||
+      oldDelegate.lens != lens ||
+      oldDelegate.pressure != pressure ||
+      oldDelegate.lightX != lightX ||
+      oldDelegate.circular != circular;
 }

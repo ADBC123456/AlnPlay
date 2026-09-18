@@ -74,6 +74,7 @@ class _HomeScreenState extends State<HomeScreen>
   bool _sortByName = false;
   bool _refreshing = false;
   bool _openingRecent = false;
+  bool _clearingLibrary = false;
   bool _keyboardWasVisible = false;
 
   /// "Continue watching": videos with a saved resume position, most recently
@@ -103,7 +104,7 @@ class _HomeScreenState extends State<HomeScreen>
     widget.refreshTick?.addListener(_loadLibrary);
     // Reload whenever the persisted list changes (e.g. a save or remove).
     ContinueWatchingStore.changes.addListener(_loadLibrary);
-    LibraryFoldersStore.changes.addListener(_loadLibrary);
+    LibraryFoldersStore.changes.addListener(_onFoldersChanged);
     // Update cards when TMDB metadata resolves for a visible entry.
     TmdService.instance.addListener(_onMetadataChanged);
     _unifiedLibrary.addListener(_onUnifiedLibraryChanged);
@@ -138,7 +139,7 @@ class _HomeScreenState extends State<HomeScreen>
     appRouteObserver.unsubscribe(this);
     widget.refreshTick?.removeListener(_loadLibrary);
     ContinueWatchingStore.changes.removeListener(_loadLibrary);
-    LibraryFoldersStore.changes.removeListener(_loadLibrary);
+    LibraryFoldersStore.changes.removeListener(_onFoldersChanged);
     TmdService.instance.removeListener(_onMetadataChanged);
     _unifiedLibrary.removeListener(_onUnifiedLibraryChanged);
     WidgetsBinding.instance.removeObserver(this);
@@ -206,6 +207,62 @@ class _HomeScreenState extends State<HomeScreen>
       setState(() => _entries = entries);
     }
     _resolveMetadata(entries);
+  }
+
+  Future<void> _onFoldersChanged() async {
+    final known = _folders.map((folder) => folder.id).toSet();
+    await _loadLibrary();
+    final added = _folders
+        .where((folder) => !known.contains(folder.id))
+        .toList();
+    if (added.isEmpty) return;
+    try {
+      await _unifiedLibrary.refresh(added);
+    } catch (_) {
+      // A bookmark remains available for an explicit retry if its source is offline.
+    }
+  }
+
+  Future<void> _clearAll({required bool library}) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: AppText(library ? 'Clear library?' : 'Clear continue watching?'),
+        content: AppText(
+          library
+              ? 'Removes library folders and the media index. Your video files, saved servers and watch history are kept.'
+              : 'Removes all entries from continue watching. Saved playback positions and watched marks are kept.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const AppText('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const AppText('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _clearingLibrary = true);
+    try {
+      if (library) {
+        await _unifiedLibrary.clearLibrary();
+      } else {
+        await ContinueWatchingStore.clearAll();
+      }
+      await _loadLibrary();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: AppText('Could not clear library data.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _clearingLibrary = false);
+    }
   }
 
   /// Loads the "Your library" folder list, then kicks off best-effort TMDB
@@ -799,6 +856,32 @@ class _HomeScreenState extends State<HomeScreen>
                           ],
                         ),
                   actions: [
+                    if (!widget.sourcesOnly)
+                      PopupMenuButton<String>(
+                        enabled: !_clearingLibrary,
+                        tooltip: context.tr('Library actions'),
+                        icon: _clearingLibrary
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.more_vert),
+                        onSelected: (action) =>
+                            _clearAll(library: action == 'library'),
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(
+                            value: 'recent',
+                            child: AppText('Clear continue watching'),
+                          ),
+                          const PopupMenuItem(
+                            value: 'library',
+                            child: AppText('Clear library'),
+                          ),
+                        ],
+                      ),
                     if (widget.sourcesOnly)
                       IconButton(
                         tooltip: context.tr('Add a source'),

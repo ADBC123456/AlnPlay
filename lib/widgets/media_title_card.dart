@@ -1,3 +1,4 @@
+import '../widgets/cached_image.dart';
 import 'package:flutter/material.dart';
 
 import '../library/models/library_models.dart';
@@ -48,7 +49,7 @@ class MediaTitleCard extends StatelessWidget {
                     ),
                   ),
                   if (title.poster != null)
-                    Image.network(
+                    CachedImage(
                       title.poster!,
                       fit: BoxFit.cover,
                       errorBuilder: (_, _, _) => const SizedBox.shrink(),

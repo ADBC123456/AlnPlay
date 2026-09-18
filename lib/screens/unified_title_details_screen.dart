@@ -1,3 +1,4 @@
+import '../widgets/cached_image.dart';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -212,29 +213,45 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
         body: CustomScrollView(
           controller: _pageController,
           slivers: [
-            SliverToBoxAdapter(
-              child: SizedBox(
-                height: heroHeight,
-                child: _TitleHero(
-                  contentInsets: contentInsets,
-                  title: title,
-                  ownedEpisodes: episodes.length,
-                  playLabel: _primaryLabel(),
-                  opening: _opening,
-                  refreshing: _refreshing,
-                  canPlay: _progressLoaded && files.isNotEmpty,
-                  onBack: () => Navigator.maybePop(context),
-                  onPlay: () => _playPrimary(title, episodes, files),
-                  onPlayMpv: Platform.isAndroid
-                      ? () => _playPrimary(
-                          title,
-                          episodes,
-                          files,
-                          engine: PlayEngine.mpv,
-                        )
-                      : null,
-                  onMenu: (value) =>
-                      _handleMenu(value, title, files, visibleEpisodes),
+            SliverAppBar(
+              pinned: true,
+              automaticallyImplyLeading: false,
+              expandedHeight: heroHeight - media.padding.top,
+              backgroundColor: _pageColor,
+              surfaceTintColor: Colors.transparent,
+              leading: _pastHero ? const BackButton() : null,
+              title: _pastHero
+                  ? Text(
+                      title.displayTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : null,
+              flexibleSpace: FlexibleSpaceBar(
+                collapseMode: CollapseMode.pin,
+                background: SizedBox(
+                  height: heroHeight,
+                  child: _TitleHero(
+                    contentInsets: contentInsets,
+                    title: title,
+                    ownedEpisodes: episodes.length,
+                    playLabel: _primaryLabel(),
+                    opening: _opening,
+                    refreshing: _refreshing,
+                    canPlay: _progressLoaded && files.isNotEmpty,
+                    onBack: () => Navigator.maybePop(context),
+                    onPlay: () => _playPrimary(title, episodes, files),
+                    onPlayMpv: Platform.isAndroid
+                        ? () => _playPrimary(
+                            title,
+                            episodes,
+                            files,
+                            engine: PlayEngine.mpv,
+                          )
+                        : null,
+                    onMenu: (value) =>
+                        _handleMenu(value, title, files, visibleEpisodes),
+                  ),
                 ),
               ),
             ),
@@ -1032,13 +1049,13 @@ class _Artwork extends StatelessWidget {
         child: Icon(Icons.movie_outlined, size: 72, color: Colors.white24),
       );
     }
-    return Image.network(
+    return CachedImage(
       url,
       fit: BoxFit.cover,
       alignment: Alignment.topCenter,
       filterQuality: FilterQuality.medium,
       errorBuilder: (_, _, _) => fallback != null && fallback != url
-          ? Image.network(
+          ? CachedImage(
               fallback!,
               fit: BoxFit.cover,
               alignment: Alignment.topCenter,
@@ -1466,7 +1483,7 @@ class _EpisodeCard extends StatelessWidget {
               fit: StackFit.expand,
               children: [
                 if (episode.still != null)
-                  Image.network(
+                  CachedImage(
                     episode.still!,
                     fit: BoxFit.cover,
                     errorBuilder: (_, _, _) => SizedBox.shrink(),

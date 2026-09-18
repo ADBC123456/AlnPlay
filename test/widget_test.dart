@@ -9,6 +9,7 @@ import 'package:dream_player/screens/file_browser_screen.dart';
 import 'package:dream_player/screens/player_screen.dart';
 import 'package:dream_player/widgets/format_chip.dart';
 import 'package:dream_player/services/cache_quota_manager.dart';
+import 'package:dream_player/services/image_cache_service.dart';
 
 void main() {
   testWidgets('resource library shows saved WebDAV servers as shortcuts', (
@@ -171,9 +172,13 @@ void main() {
     // Construct inside the widget test's fake-async zone so its serialized
     // cache futures are scheduled by the same clock as the UI.
     CacheQuotaManager.instanceForTesting = CacheQuotaManager(roots: []);
+    ImageCacheService.instanceForTesting = ImageCacheService(
+      directory: () async => throw MissingPluginException(),
+    );
     addTearDown(() {
       CacheQuotaManager.instanceForTesting?.dispose();
       CacheQuotaManager.instanceForTesting = null;
+      ImageCacheService.instanceForTesting = null;
     });
     // The dreamplayer/cache channel is only registered natively; in the test
     // binding an unhandled channel never completes, so mock it to return 0.

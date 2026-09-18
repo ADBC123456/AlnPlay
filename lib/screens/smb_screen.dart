@@ -1,3 +1,4 @@
+import '../widgets/cached_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -945,7 +946,7 @@ class _SmbTile extends StatelessWidget {
       leading: posterUrl != null
           ? ClipRRect(
               borderRadius: BorderRadius.circular(4),
-              child: Image.network(
+              child: CachedImage(
                 posterUrl,
                 width: 48,
                 height: 72,
