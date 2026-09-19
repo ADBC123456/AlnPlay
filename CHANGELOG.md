@@ -3,6 +3,12 @@
 All notable changes to AlnPlay are documented here. Each release's entry is
 pulled into the GitHub Release body automatically by `.github/workflows/release.yml`.
 
+## 1.3.0
+
+### Fixed
+
+- **Playable episodes recovered from stale library bindings** — unified title pages now reconcile legacy or migrated episode IDs against explicit `SxxEyy` filenames when the exact stored binding no longer matches. Existing WebDAV and other indexed files remain playable without clearing the library, and the "In library" count now includes only episodes that have an available file version.
+
 ## 1.2.0
 
 ### Added
