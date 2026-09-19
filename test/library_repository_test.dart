@@ -80,6 +80,50 @@ void main() {
   });
 
   test(
+    'reconciles a stale episode id from an explicit SxxEyy filename',
+    () async {
+      const title = MediaTitle(
+        id: 'tmdb:tv:42',
+        kind: MediaTitleKind.tv,
+        tmdbId: 42,
+        displayTitle: 'Example Show',
+      );
+      const episode = LibraryEpisode(
+        id: 'tmdb:tv:42:s1:e176',
+        titleId: 'tmdb:tv:42',
+        seasonNumber: 1,
+        episodeNumber: 176,
+        displayName: 'Episode 176',
+      );
+      await repository.applyScanBatch(
+        const ScanBatch(rootId: 'root', generation: '1', isStart: true),
+      );
+      await repository.applyScanBatch(
+        ScanBatch(
+          rootId: 'root',
+          generation: '1',
+          titles: const [title],
+          episodes: const [episode],
+          files: [
+            _file(
+              id: 'webdav:176',
+              rootId: 'root',
+              sourceId: 'webdav:home',
+              titleId: title.id,
+              episodeId: 'tmdb:tv:42:sunknown:e176',
+              fileName: 'Example.Show.S01E176.2160p.mkv',
+            ),
+          ],
+        ),
+      );
+
+      final data = await repository.snapshot();
+      expect(data.versionsForEpisode(episode.id).single.id, 'webdav:176');
+      expect(data.availableEpisodeCount(title.id), 1);
+    },
+  );
+
+  test(
     'completed overlapping-root scan removes only its own reference',
     () async {
       await repository.applyScanBatch(

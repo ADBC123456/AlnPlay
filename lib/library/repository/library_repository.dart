@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../../services/tmdb_client.dart';
 import '../models/library_models.dart';
 
 class ScanBatch {
@@ -69,23 +70,41 @@ class LibrarySnapshot {
       .where((file) => file.titleId == titleId)
       .toList(growable: false);
 
-  List<MediaFile> versionsForEpisode(String episodeId) => files.values
-      .where(
-        (file) =>
-            file.episodeId == episodeId &&
-            file.availability != MediaAvailability.missing,
-      )
-      .toList(growable: false);
+  List<MediaFile> versionsForEpisode(String episodeId) {
+    final exact = files.values
+        .where(
+          (file) =>
+              file.episodeId == episodeId &&
+              file.availability != MediaAvailability.missing,
+        )
+        .toList(growable: false);
+    if (exact.isNotEmpty) return exact;
 
-  int availableEpisodeCount(String titleId) => files.values
+    // Older indexes can retain a stale/unknown episode id after a metadata
+    // migration even though the title binding and filename are still valid.
+    // Reconcile explicit SxxEyy filenames at read time so those files remain
+    // playable until the next scan rewrites their canonical episode id.
+    final episode = episodes[episodeId];
+    if (episode == null || episode.seasonNumber == null) return exact;
+    return files.values.where((file) {
+      if (file.titleId != episode.titleId ||
+          file.availability == MediaAvailability.missing) {
+        return false;
+      }
+      final parsed = ParsedFileName.parse(file.originalFileName);
+      return parsed.isEpisode &&
+          parsed.seasonKnown &&
+          parsed.season == episode.seasonNumber &&
+          parsed.episode == episode.episodeNumber;
+    }).toList(growable: false);
+  }
+
+  int availableEpisodeCount(String titleId) => episodes.values
       .where(
-        (file) =>
-            file.titleId == titleId &&
-            file.episodeId != null &&
-            file.availability != MediaAvailability.missing,
+        (episode) =>
+            episode.titleId == titleId &&
+            versionsForEpisode(episode.id).isNotEmpty,
       )
-      .map((file) => file.episodeId)
-      .toSet()
       .length;
 }
 

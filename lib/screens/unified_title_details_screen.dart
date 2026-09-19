@@ -234,7 +234,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
                   child: _TitleHero(
                     contentInsets: contentInsets,
                     title: title,
-                    ownedEpisodes: episodes.length,
+                    ownedEpisodes: snapshot.availableEpisodeCount(title.id),
                     playLabel: _primaryLabel(),
                     opening: _opening,
                     refreshing: _refreshing,
