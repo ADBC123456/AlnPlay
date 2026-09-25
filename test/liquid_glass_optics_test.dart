@@ -52,12 +52,15 @@ void main() {
             ..setFloat(1, height.toDouble())
             ..setFloat(2, width.toDouble())
             ..setFloat(3, height.toDouble())
-            ..setFloat(4, dispersion)
-            ..setFloat(5, 12)
+            ..setFloat(4, 200)
+            ..setFloat(5, dispersion * 9)
             ..setFloat(6, 0)
             ..setFloat(7, 0)
             ..setFloat(8, width.toDouble())
             ..setFloat(9, height.toDouble())
+            ..setFloat(10, 150)
+            ..setFloat(11, .55)
+            ..setFloat(12, 0)
             ..setImageSampler(0, input);
           final recorder = ui.PictureRecorder();
           Canvas(recorder).drawRect(

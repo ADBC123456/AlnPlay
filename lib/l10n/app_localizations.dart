@@ -77,10 +77,6 @@ class AppLocalizations {
         ),
         (m) => '“${m[1]}”将不再显示在这里，设备上的文件不会被删除。',
       ),
-      (
-        RegExp(r'^Bookmarked (.+) to Home \((.+)\)$'),
-        (m) => '已将 ${m[1]} 收藏到首页（${m[2]}）',
-      ),
       (RegExp(r'^(.+) added to your library$'), (m) => '${m[1]} 已添加到媒体库'),
       (RegExp(r'^Continue from (.+)$'), (m) => '从 ${m[1]} 继续'),
       (RegExp(r'^(.+) · Continue from (.+)$'), (m) => '${m[1]} · 从 ${m[2]} 继续'),
@@ -472,7 +468,6 @@ class AppLocalizations {
     'Add server': '添加服务器',
     'Scan network': '扫描局域网',
     'Add to library': '添加到媒体库',
-    'Bookmark this folder to Home': '将此文件夹收藏到首页',
     'Sync watched from SIMKL': '从 SIMKL 同步观看记录',
     'Add share': '添加共享',
     'Mark as watched': '标记为已观看',

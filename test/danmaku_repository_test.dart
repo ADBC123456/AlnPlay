@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 
@@ -147,10 +148,100 @@ void main() {
       isNull,
     );
   });
+
+  test('empty cache expires after five minutes', () async {
+    var now = DateTime(2026, 9, 20, 12);
+    source.returnEmpty = true;
+    repository = DanmakuRepository(
+      cache: DanmakuCache(directory: temp),
+      registry: registry,
+      clock: () => now,
+    );
+    const request = DanmakuVideoRequest(
+      videoIdentity: 'empty-video',
+      fileName: 'Example.S01E01.mkv',
+    );
+
+    expect(
+      (await repository.loadForVideo(
+        sourceId: source.sourceId,
+        baseUrl: 'https://danmaku.example',
+        request: request,
+      )).status,
+      DanmakuFetchStatus.empty,
+    );
+    now = now.add(const Duration(minutes: 4));
+    await repository.loadForVideo(
+      sourceId: source.sourceId,
+      baseUrl: 'https://danmaku.example',
+      request: request,
+    );
+    expect(source.fetchCalls, 1);
+
+    now = now.add(const Duration(minutes: 2));
+    await repository.loadForVideo(
+      sourceId: source.sourceId,
+      baseUrl: 'https://danmaku.example',
+      request: request,
+    );
+    expect(source.fetchCalls, 2);
+  });
+
+  test('an older request cannot overwrite a newer forced refresh', () async {
+    final delayed = _DelayedSource();
+    registry = DanmakuSourceRegistry()..register(delayed);
+    repository = DanmakuRepository(
+      cache: DanmakuCache(directory: temp),
+      registry: registry,
+    );
+    const request = DanmakuVideoRequest(
+      videoIdentity: 'race-video',
+      fileName: 'Example.S01E01.mkv',
+    );
+    final first = repository.loadForEpisode(
+      sourceId: delayed.sourceId,
+      baseUrl: 'https://danmaku.example',
+      request: request,
+      episodeId: 'episode-1',
+      forceRefresh: true,
+    );
+    await delayed.waitForRequests(1);
+    final second = repository.loadForEpisode(
+      sourceId: delayed.sourceId,
+      baseUrl: 'https://danmaku.example',
+      request: request,
+      episodeId: 'episode-1',
+      forceRefresh: true,
+    );
+    await delayed.waitForRequests(2);
+    delayed.requests[1].complete(_comments('new'));
+    await second;
+    delayed.requests[0].complete(_comments('old'));
+    await first;
+
+    final cached = await repository.cache.read(
+      sourceId: delayed.sourceId,
+      baseUrl: 'https://danmaku.example',
+      videoIdentity: request.videoIdentity,
+    );
+    expect(cached!.comments.single.content, 'new');
+  });
 }
+
+DanmakuSourceComments _comments(String value) => DanmakuSourceComments(
+  comments: [
+    DanmakuSourceComment(
+      timeSeconds: 1,
+      mode: 1,
+      colorRgb: 0xFFFFFF,
+      content: value,
+    ),
+  ],
+);
 
 class _Source implements DanmakuSource {
   int fetchCalls = 0;
+  bool returnEmpty = false;
   final List<String> requestedEpisodeIds = [];
 
   @override
@@ -187,6 +278,7 @@ class _Source implements DanmakuSource {
   }) async {
     fetchCalls++;
     requestedEpisodeIds.add(episodeId);
+    if (returnEmpty) return const DanmakuSourceComments(comments: []);
     return const DanmakuSourceComments(
       comments: [
         DanmakuSourceComment(
@@ -220,4 +312,24 @@ class _Source implements DanmakuSource {
     required DanmakuSegment segment,
     DanmakuCancelToken? cancelToken,
   }) async => const [];
+}
+
+class _DelayedSource extends _Source {
+  final List<Completer<DanmakuSourceComments>> requests = [];
+
+  @override
+  Future<DanmakuSourceComments> fetchComments({
+    required String episodeId,
+    DanmakuCancelToken? cancelToken,
+  }) {
+    final request = Completer<DanmakuSourceComments>();
+    requests.add(request);
+    return request.future;
+  }
+
+  Future<void> waitForRequests(int count) async {
+    while (requests.length < count) {
+      await Future<void>.delayed(Duration.zero);
+    }
+  }
 }

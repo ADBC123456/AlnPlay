@@ -133,7 +133,7 @@ class ImageCacheService {
       }
       if (revision != _revision) return null;
       if (bytes == null || bytes.isEmpty || bytes.length > maxImageBytes) {
-        return _anyCached(uri);
+        return await _anyCached(uri);
       }
       final target = await _file(uri);
       var written = false;

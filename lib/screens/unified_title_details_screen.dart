@@ -1,3 +1,4 @@
+import 'dart:async';
 import '../widgets/cached_image.dart';
 import 'dart:io' show Platform;
 
@@ -5,10 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../danmaku/binding/danmaku_binding_store.dart';
+import '../danmaku/identity/video_identity.dart';
 import '../danmaku/scraper/scrape_state.dart';
 import '../danmaku/service/danmaku_service.dart';
 import '../library/models/library_models.dart';
 import '../library/episode_target.dart';
+import '../library/repository/library_repository.dart';
+import '../library/scanner/library_scanner.dart';
 import '../library/title_playback_preferences.dart';
 import '../library/unified_library_service.dart';
 import '../l10n/app_localizations.dart';
@@ -50,10 +54,12 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
   bool _opening = false;
   bool _refreshing = false;
   bool _overviewExpanded = false;
+  bool _staleRefreshRequested = false;
   Map<String, ScrapeEpisodeState> _danmakuByFileKey = const {};
   String? _requestedDanmakuScope;
   double _heroHeight = 0;
   bool _pastHero = false;
+  LibrarySnapshot? _observedSnapshot;
 
   ContinueWatchingEntry? get _resume =>
       _target?.progress ??
@@ -64,10 +70,12 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
   @override
   void initState() {
     super.initState();
+    _observedSnapshot = _library.snapshot;
     _library.addListener(_onLibraryChanged);
     ContinueWatchingStore.changes.addListener(_loadProgress);
     _pageController.addListener(_onPageScrolled);
     _loadProgress();
+    unawaited(_refreshStaleLibrary());
   }
 
   @override
@@ -85,11 +93,47 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
     if (pastHero != _pastHero && mounted) setState(() => _pastHero = pastHero);
   }
 
+  Future<void> _refreshStaleLibrary() async {
+    if (_staleRefreshRequested) return;
+    _staleRefreshRequested = true;
+    try {
+      final folders = await LibraryFoldersStore.load();
+      await _library.initialize();
+      await _library.refreshStale(folders);
+      final titleFiles = _library.snapshot.filesForTitle(widget.titleId);
+      final hasAvailableFile = titleFiles.any(
+        (file) => file.availability != MediaAvailability.missing,
+      );
+      if (!hasAvailableFile) {
+        final historicalRoots = titleFiles
+            .expand((file) => {...file.rootIds, ...file.historicalRootIds})
+            .toSet();
+        final roots = historicalRoots.isEmpty
+            ? folders
+            : folders
+                  .where((folder) => historicalRoots.contains(folder.id))
+                  .toList();
+        if (roots.isNotEmpty) await _library.refresh(roots);
+      }
+    } catch (_) {
+      // The cached snapshot remains usable when a background refresh cannot
+      // start; the details page reports the scan state when one is active.
+    }
+  }
+
   void _onLibraryChanged() {
     if (mounted) {
+      final snapshot = _library.snapshot;
+      if (identical(snapshot, _observedSnapshot)) {
+        // Progress-only notifications update status text without re-running
+        // episode targeting against an unchanged catalog.
+        setState(() {});
+        return;
+      }
+      _observedSnapshot = snapshot;
       setState(() {
         _target = resolveEpisodeTarget(
-          snapshot: _library.snapshot,
+          snapshot: snapshot,
           titleId: widget.titleId,
           progress: _progress,
           preference: _preference,
@@ -149,25 +193,45 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
       );
     }
 
-    final files = snapshot
-        .filesForTitle(title.id)
+    final allTitleFiles = snapshot.filesForTitle(title.id);
+    final files = allTitleFiles
         .where((f) => f.availability != MediaAvailability.missing)
         .toList();
+    final titleRootIds = allTitleFiles
+        .expand((file) => {...file.rootIds, ...file.historicalRootIds})
+        .toSet();
+    final titleScans = titleRootIds
+        .map((rootId) => _library.progressByRoot[rootId])
+        .whereType<ScanProgress>()
+        .toList();
+    final unavailableEpisodeLabel =
+        titleScans.any(
+          (scan) =>
+              scan.state == ScanState.queued ||
+              scan.state == ScanState.scanning,
+        )
+        ? '正在更新'
+        : titleScans.any(
+            (scan) =>
+                scan.state == ScanState.failed ||
+                scan.state == ScanState.partial,
+          )
+        ? '来源更新失败'
+        : '未找到可播放文件';
     final episodes =
         snapshot.episodes.values.where((e) => e.titleId == title.id).toList()
           ..sort(_compareEpisodes);
-    final List<int?> seasons =
-        episodes.map((e) => e.seasonNumber).whereType<int>().toSet().toList()
-          ..sort();
+    final seasons = <int?>[
+      ...episodes.map((e) => e.seasonNumber).whereType<int>().toSet(),
+    ]..sort((a, b) => a!.compareTo(b!));
     if (episodes.any((episode) => episode.seasonNumber == null)) {
       seasons.add(null);
     }
     if (_progressLoaded && !_seasonChosen && seasons.isNotEmpty) {
       _seasonChosen = true;
-      _selectedSeason = seasons.firstWhere(
-        (s) => s != null && s > 0,
-        orElse: () => seasons.first,
-      );
+      _selectedSeason =
+          seasons.whereType<int>().where((season) => season > 0).firstOrNull ??
+          seasons.first;
     }
     if (_selectedSeason != null && !seasons.contains(_selectedSeason)) {
       _selectedSeason = seasons.firstOrNull;
@@ -249,8 +313,12 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
                             engine: PlayEngine.mpv,
                           )
                         : null,
-                    onMenu: (value) =>
-                        _handleMenu(value, title, files, visibleEpisodes),
+                    onMenu: (value) => _handleMenu(
+                      value,
+                      title,
+                      snapshot.filesForTitle(title.id),
+                      visibleEpisodes,
+                    ),
                   ),
                 ),
               ),
@@ -338,6 +406,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
                       versionsFor: snapshot.versionsForEpisode,
                       progressFor: _episodeProgress,
                       danmakuFor: _episodeDanmaku,
+                      unavailableLabel: unavailableEpisodeLabel,
                       onPlay: (episode, versions) =>
                           _chooseAndPlay(title, episode, versions),
                       onMore: (episode, versions) =>
@@ -409,8 +478,8 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
 
   ScrapeEpisodeState? _episodeDanmaku(List<MediaFile> versions) {
     for (final file in versions) {
-      final key = file.legacyResumeKey;
-      final state = _danmakuByFileKey[key] ?? _danmakuByFileKey['danmaku:$key'];
+      final key = normalizeDanmakuIdentityKey(file.legacyResumeKey);
+      final state = _danmakuByFileKey[key];
       if (state?.ref != null &&
           (state!.status == ScrapeStatus.matched ||
               state.status == ScrapeStatus.success ||
@@ -447,8 +516,8 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
     setState(() {
       _danmakuByFileKey = {
         for (final entry in bindings.entries)
-          entry.key: ScrapeEpisodeState(
-            key: entry.key,
+          normalizeDanmakuIdentityKey(entry.key): ScrapeEpisodeState(
+            key: normalizeDanmakuIdentityKey(entry.key),
             fileName: entry.key,
             status: ScrapeStatus.matched,
             ref: entry.value.ref,
@@ -499,7 +568,9 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
 
   Future<void> _refreshTitle(List<MediaFile> files) async {
     if (_refreshing) return;
-    final rootIds = files.expand((file) => file.rootIds).toSet();
+    final rootIds = files
+        .expand((file) => {...file.rootIds, ...file.historicalRootIds})
+        .toSet();
     final folders = (await LibraryFoldersStore.load())
         .where((folder) => rootIds.contains(folder.id))
         .toList();
@@ -820,7 +891,7 @@ class _UnifiedTitleDetailsScreenState extends State<UnifiedTitleDetailsScreen> {
       for (final file in _library.snapshot.versionsForEpisode(episode.id)) {
         videos.add(
           ScrapeVideo(
-            key: file.legacyResumeKey,
+            key: normalizeDanmakuIdentityKey(file.legacyResumeKey),
             fileName: file.originalFileName,
             sizeBytes: file.sizeBytes,
             season: episode.seasonNumber,
@@ -1359,6 +1430,7 @@ class _EpisodeRail extends StatefulWidget {
     required this.versionsFor,
     required this.progressFor,
     required this.danmakuFor,
+    required this.unavailableLabel,
     required this.onPlay,
     required this.onMore,
   });
@@ -1368,6 +1440,7 @@ class _EpisodeRail extends StatefulWidget {
   final List<MediaFile> Function(String) versionsFor;
   final _EpisodeProgress? Function(List<MediaFile>) progressFor;
   final ScrapeEpisodeState? Function(List<MediaFile>) danmakuFor;
+  final String unavailableLabel;
   final void Function(LibraryEpisode, List<MediaFile>) onPlay;
   final void Function(LibraryEpisode, List<MediaFile>) onMore;
 
@@ -1440,6 +1513,7 @@ class _EpisodeRailState extends State<_EpisodeRail> {
                 versions: versions,
                 progress: widget.progressFor(versions),
                 danmaku: widget.danmakuFor(versions),
+                unavailableLabel: widget.unavailableLabel,
                 onPlay: () => widget.onPlay(episode, versions),
                 onMore: () => widget.onMore(episode, versions),
               ),
@@ -1457,6 +1531,7 @@ class _EpisodeCard extends StatelessWidget {
     required this.versions,
     required this.progress,
     required this.danmaku,
+    required this.unavailableLabel,
     required this.onPlay,
     required this.onMore,
   });
@@ -1464,6 +1539,7 @@ class _EpisodeCard extends StatelessWidget {
   final List<MediaFile> versions;
   final _EpisodeProgress? progress;
   final ScrapeEpisodeState? danmaku;
+  final String unavailableLabel;
   final VoidCallback onPlay;
   final VoidCallback onMore;
 
@@ -1576,7 +1652,7 @@ class _EpisodeCard extends StatelessWidget {
       ),
       if (versions.isEmpty)
         AppText(
-          '不可用',
+          unavailableLabel,
           style: TextStyle(
             color: Theme.of(context).colorScheme.onSurfaceVariant,
             fontSize: 12,

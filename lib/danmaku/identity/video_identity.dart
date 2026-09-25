@@ -30,7 +30,20 @@ const int danmakuHashBytes = 16 * 1024 * 1024;
 /// Prefix distinguishing danmaku identity keys from other key namespaces
 /// (`folder:`, resume keys…). Kept out of the resume-key space so a renamed
 /// source key shape can never collide.
-const String _keyPrefix = 'danmaku:';
+const String danmakuIdentityPrefix = 'danmaku:';
+
+/// Converts every producer's resume/file key to the one canonical namespace.
+String normalizeDanmakuIdentityKey(String value) {
+  final trimmed = value.trim();
+  if (trimmed.startsWith(danmakuIdentityPrefix)) return trimmed;
+  return '$danmakuIdentityPrefix$trimmed';
+}
+
+/// Pre-namespace key used by older binding and cache records.
+String legacyDanmakuIdentityKey(String value) {
+  final normalized = normalizeDanmakuIdentityKey(value);
+  return normalized.substring(danmakuIdentityPrefix.length);
+}
 
 /// Reads the first [bytes] of [path] and returns their MD5 hex. Null when
 /// the file can't be read (missing, permission, IO error) — callers fall
@@ -125,7 +138,7 @@ VideoIdentity identityFor(
   }
 
   return VideoIdentity(
-    stableKey: _keyPrefix + _stableKeyBody(video),
+    stableKey: normalizeDanmakuIdentityKey(_stableKeyBody(video)),
     fileName: fileName,
     fileSize: fileSize,
     fileHash: hash,

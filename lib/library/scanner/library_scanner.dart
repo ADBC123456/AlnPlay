@@ -39,7 +39,7 @@ class CoordinatedLibraryScanner implements LibraryScanner {
        _clock = clock ?? DateTime.now;
 
   static const int batchSize = 100;
-  static const Duration batchInterval = Duration(seconds: 1);
+  static const Duration batchInterval = Duration(milliseconds: 250);
   static const Duration listingTimeout = Duration(seconds: 30);
   static const Duration smallTextTimeout = Duration(seconds: 10);
 
@@ -127,6 +127,7 @@ class CoordinatedLibraryScanner implements LibraryScanner {
     final staged = <MatchResult>[];
     final identifying = <Future<void>>[];
     var lastFlush = _clock();
+    var lastProgress = _clock();
     var isPartial = false;
     Object? partialError;
     var acceptingMetadata = true;
@@ -221,6 +222,10 @@ class CoordinatedLibraryScanner implements LibraryScanner {
             seen.add(file.id);
             // Persist discovery before optional STRM validation and metadata.
             staged.add(MatchResult(file: file));
+            if (staged.length >= batchSize ||
+                _clock().difference(lastFlush) >= batchInterval) {
+              await flush();
+            }
             if (file.isStrm) {
               final SmallTextLibrarySourceAdapter? reader =
                   adapter is SmallTextLibrarySourceAdapter
@@ -271,17 +276,23 @@ class CoordinatedLibraryScanner implements LibraryScanner {
             });
             identifying.add(task);
             if (identifying.length >= 32) {
+              // Directory discovery must become visible even when metadata
+              // providers are slow or offline.
+              await flush();
               await Future.wait(identifying);
               identifying.clear();
               _checkCancelled(root.id);
             }
-            _progress.add(
-              ScanProgress(
-                rootId: root.id,
-                state: ScanState.scanning,
-                discoveredFiles: seen.length,
-              ),
-            );
+            if (_clock().difference(lastProgress) >= batchInterval) {
+              _progress.add(
+                ScanProgress(
+                  rootId: root.id,
+                  state: ScanState.scanning,
+                  discoveredFiles: seen.length,
+                ),
+              );
+              lastProgress = _clock();
+            }
           }
           cursor = page.nextCursor;
           if (cursor != null && cursor.isNotEmpty && !seenCursors.add(cursor)) {

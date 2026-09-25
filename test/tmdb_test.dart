@@ -60,6 +60,80 @@ void main() {
       expect(parsed.season, 1);
       expect(parsed.episode, 3);
     });
+
+    test('numeric leading episode names use ancestor title and Season 1', () {
+      for (final fileName in ['001.mkv', '001 - 天南小镇.mkv', '001_1080p.mkv']) {
+        final parsed = ParsedFileName.parseWithAncestors(fileName, const [
+          '电视剧',
+          '凡人修仙传',
+        ]);
+        expect(parsed.isEpisode, isTrue, reason: fileName);
+        expect(parsed.seriesName, '凡人修仙传', reason: fileName);
+        expect(parsed.seasonKnown, isTrue, reason: fileName);
+        expect(parsed.season, 1, reason: fileName);
+        expect(parsed.episode, 1, reason: fileName);
+      }
+    });
+
+    test('numeric leading episode respects an explicit season directory', () {
+      final parsed = ParsedFileName.parseWithAncestors('001_1080p.mkv', const [
+        '电视剧',
+        '凡人修仙传',
+        '第二季',
+      ]);
+      expect(parsed.seasonKnown, isTrue);
+      expect(parsed.season, 2);
+      expect(parsed.episode, 1);
+    });
+
+    test('numeric first segment beats title digits; season folders', () {
+      final part = ParsedFileName.parseWithAncestors('001 - Part 2.mkv', const [
+        'Show',
+      ]);
+      expect(part.episode, 1);
+      expect(part.seriesName, 'Show');
+      for (final folder in ['Season 2', 'S02', '第2季', '第二季']) {
+        final parsed = ParsedFileName.parseWithAncestors('001.mkv', [
+          'Show',
+          folder,
+        ]);
+        expect(parsed.season, 2, reason: folder);
+        expect(parsed.episode, 1, reason: folder);
+      }
+      final middle = ParsedFileName.parseWithAncestors(
+        '2 Broke Girls - 05.mkv',
+        const [],
+      );
+      expect(middle.episode, 5);
+    });
+
+    test('standalone release years are not episodes', () {
+      for (final fileName in ['2024.mkv', '2024_1080p.mkv']) {
+        final parsed = ParsedFileName.parseWithAncestors(fileName, const [
+          '电影',
+        ]);
+        expect(parsed.isEpisode, isFalse, reason: fileName);
+      }
+    });
+
+    test('leading numeric movie titles with a release year stay movies', () {
+      final parsed = ParsedFileName.parseWithAncestors(
+        '24.2016.1080p.mkv',
+        const ['电影'],
+      );
+      expect(parsed.isEpisode, isFalse);
+      expect(parsed.year, 2016);
+    });
+
+    test('explicit SxxExx is not rewritten by the loose numeric parser', () {
+      final parsed = ParsedFileName.parseWithAncestors('凡人修仙传.S01E146.mkv', const [
+        '电视剧',
+      ]);
+      expect(parsed.seriesName, '凡人修仙传');
+      expect(parsed.season, 1);
+      expect(parsed.episode, 146);
+    });
+
     test('parses a movie title and year from a scene filename', () {
       final parsed = ParsedFileName.parse(
         'The.Great.Movie.2015.1080p.BluRay.x265-GROUP.mkv',

@@ -284,10 +284,25 @@ class DanmuApiSource implements DanmakuSource, ProgressiveDanmakuSource {
     // the `{success: true}` envelope used by match/search. Treat an explicit
     // rejection as failure, but accept the documented bare payload whenever
     // `comments` is a list.
-    if (decoded['success'] == false || decoded['comments'] is! List) {
+    final errorCode = _intValue(decoded['errorCode']);
+    if (decoded['success'] == false ||
+        (errorCode != null && errorCode != 0) ||
+        decoded['comments'] is! List) {
       throw _protocolExceptionFor(decoded, 'comment');
     }
+    final rawComments = decoded['comments'] as List;
     final parsed = parseDanmuApiCommentsMap(decoded, source: sourceId);
+    final declaredCount = _intValue(decoded['count']);
+    if (rawComments.isNotEmpty && parsed.items.isEmpty) {
+      throw const DanmakuProtocolException(
+        'comment: every returned comment was malformed',
+      );
+    }
+    if (rawComments.isEmpty && declaredCount != null && declaredCount > 0) {
+      throw const DanmakuProtocolException(
+        'comment: service declared comments but returned an empty list',
+      );
+    }
     return DanmakuSourceComments(
       comments: parsed.items.map(_toSourceComment).toList(growable: false),
       videoDurationSeconds: parsed.videoDurationSeconds,
@@ -427,7 +442,7 @@ class DanmuApiSource implements DanmakuSource, ProgressiveDanmakuSource {
     Map<String, dynamic> decoded,
     String endpoint,
   ) {
-    final code = (decoded['errorCode'] as num?)?.toInt();
+    final code = _intValue(decoded['errorCode']);
     final message = (decoded['errorMessage'] as String?) ?? '';
     if (message.isNotEmpty) {
       return DanmakuProtocolException('$endpoint: $message');

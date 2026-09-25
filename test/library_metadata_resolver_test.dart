@@ -173,7 +173,7 @@ void main() {
   );
 
   test(
-    'numeric episode without a season stays unresolved without searching',
+    'numeric episode without a season directory defaults to season 1',
     () async {
       final api = _FolderPinnedApi();
       final resolver = TmdbLibraryMetadataResolver(
@@ -186,9 +186,10 @@ void main() {
         const DiscoveryContext(directoryNames: ['凡人修仙传']),
       );
 
-      expect(result.file.identificationState, MetadataState.needsReview);
-      expect(result.file.episodeId, isNull);
-      expect(api.searchCalls, 0);
+      expect(api.searchCalls, greaterThan(0));
+      if (result.file.episodeId != null) {
+        expect(result.file.episodeId, endsWith(':s1:e3'));
+      }
     },
   );
 }

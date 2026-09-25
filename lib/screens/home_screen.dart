@@ -203,6 +203,9 @@ class _HomeScreenState extends State<HomeScreen>
   Future<void> _loadLibrary() async {
     final entries = await ContinueWatchingStore.load();
     await _loadLibraryFolders();
+    // Cached cards are already on screen; refresh stale roots in the
+    // background on startup and whenever the app returns to the foreground.
+    unawaited(_unifiedLibrary.refreshStale(_folders));
     if (mounted) {
       setState(() => _entries = entries);
     }

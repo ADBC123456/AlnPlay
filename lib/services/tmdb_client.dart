@@ -671,6 +671,15 @@ class ParsedFileName {
     r'^(?:(.*?)[ ._-]+)?(?:E(?:P)?(?:ISODE)?[ ._-]*|第[ ]*)?(\d{1,4})(?:[ ]*集)?$',
     caseSensitive: false,
   );
+  // A number at the start of a release name is a common TV layout when the
+  // directory supplies the series title, for example `001_1080p` or
+  // `001 - Title`. Keep this separate from [_looseEpisodePattern], which is
+  // intentionally anchored to the end for `Show - 05`. The number must be a
+  // whole first segment followed by `-`/`_`/`.` or the end, so a title that
+  // merely starts with a digit (`2 Broke Girls - 05`) keeps its suffix rule.
+  static final RegExp _leadingEpisodePattern = RegExp(
+    r'^\s*[\[\(]?\s*(\d{1,4})\s*[\]\)]?(?=\s*$|\s*[-_.])',
+  );
   static final RegExp _ancestorSeasonPattern = RegExp(
     r'^(?:S(?:EASON)?[ ._-]*|第[ ]*)(\d{1,2})(?:[ ]*季)?$',
     caseSensitive: false,
@@ -716,12 +725,25 @@ class ParsedFileName {
     final loose = _looseEpisodePattern.firstMatch(stem);
     final looseNumber = loose == null ? null : int.parse(loose.group(2)!);
     final looseLooksLikeYear =
-        loose != null &&
-        (loose.group(1)?.trim().isNotEmpty ?? false) &&
-        looseNumber! >= 1800 &&
-        looseNumber <= 2099;
+        loose != null && looseNumber! >= 1800 && looseNumber <= 2099;
+    final leading = _leadingEpisodePattern.firstMatch(stem);
+    final leadingNumber = leading == null
+        ? null
+        : int.tryParse(leading.group(1)!);
+    final leadingLooksLikeYear =
+        (leadingNumber != null &&
+            leadingNumber >= 1800 &&
+            leadingNumber <= 2099) ||
+        // A leading number followed by a release year (`24.2016...`,
+        // `9 (2009)`) is a movie naming pattern, not an episode prefix.
+        _yearPattern.hasMatch(stem);
+    // Do not let the loose suffix pattern reinterpret a proper SxxExx tag
+    // (`Show.S01E03` can otherwise look like `Show S01E` + `03`).
     final explicitEpisode =
-        base.isEpisode || (loose != null && !looseLooksLikeYear);
+        base.isEpisode ||
+        (!base.isEpisode &&
+            ((loose != null && !looseLooksLikeYear) ||
+                (leadingNumber != null && !leadingLooksLikeYear)));
     if (!explicitEpisode) return base;
 
     var season = base.season;
@@ -763,12 +785,24 @@ class ParsedFileName {
 
     var episode = base.episode;
     String? fileSeries = base.seriesName;
-    if (loose != null && !looseLooksLikeYear) {
+    // The leading numeric segment wins over a trailing number: in
+    // `001 - Part 2` the episode is 1, the `2` belongs to the episode title.
+    if (!base.isEpisode && leadingNumber != null && !leadingLooksLikeYear) {
+      episode = leadingNumber;
+    } else if (!base.isEpisode && loose != null && !looseLooksLikeYear) {
       episode = looseNumber!;
       final prefix = _cleanName(loose.group(1) ?? '');
       if (prefix.isNotEmpty && !_isContainerDirectory(prefix)) {
         fileSeries = prefix;
       }
+    }
+    // A library root can itself be the show directory. In that layout there
+    // is no Season folder to carry context, so the conventional default is
+    // the first season. Explicit S00 remains authoritative because
+    // [seasonKnown] is already true for it.
+    if (explicitEpisode && !seasonKnown && episode > 0) {
+      season = 1;
+      seasonKnown = true;
     }
     final series = (fileSeries?.isNotEmpty ?? false)
         ? _cleanName(fileSeries!)

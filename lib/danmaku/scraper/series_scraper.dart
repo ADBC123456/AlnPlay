@@ -339,12 +339,17 @@ class SeriesScraper {
       return SeriesScrapeResult(completed: true, generation: generation);
     }
 
-    // 1. Resolve a catalog only when at least one file has no saved binding.
-    // A fully bound season can be pre-cached without repeating the search.
+    // 1. Resolve a catalog only when at least one file has no saved binding
+    // or holds an automatic one that must be revalidated. A fully manually
+    // bound season can be pre-cached without repeating the search.
     List<DanmakuCatalogAnime> catalog = const [];
+    final automaticKeys = <String>{
+      for (final video in pendingVideos)
+        if (savedBindings[video.key]?.manual == false) video.key,
+    };
     final needsMatching = pendingVideos.any((video) {
       final row = st.episodes.firstWhere((episode) => episode.key == video.key);
-      return row.ref == null;
+      return row.ref == null || automaticKeys.contains(video.key);
     });
     if (needsMatching) {
       st.phase = ScrapePhase.matching;
@@ -361,10 +366,18 @@ class SeriesScraper {
         if (_isStale || generation != _generation) {
           return SeriesScrapeResult(completed: false, generation: generation);
         }
-        st.phase = ScrapePhase.failed;
-        _notify();
-        await store.ScrapeStore.saveTask(st);
-        return SeriesScrapeResult(completed: false, generation: generation);
+        final anyUnbound = pendingVideos.any(
+          (video) =>
+              st.episodes.firstWhere((e) => e.key == video.key).ref == null,
+        );
+        if (anyUnbound) {
+          st.phase = ScrapePhase.failed;
+          _notify();
+          await store.ScrapeStore.saveTask(st);
+          return SeriesScrapeResult(completed: false, generation: generation);
+        }
+        // Only revalidation failed: keep the saved automatic bindings.
+        catalog = const [];
       }
     }
     if (_isStale || generation != _generation) {
@@ -389,6 +402,7 @@ class SeriesScraper {
           generation,
           cancelToken,
           forceRefresh: forceRefresh,
+          revalidateBinding: automaticKeys.contains(videosList[i].key),
         );
       }
     }
@@ -597,9 +611,31 @@ class SeriesScraper {
     int generation,
     DanmakuCancelToken cancelToken, {
     required bool forceRefresh,
+    bool revalidateBinding = false,
   }) async {
     final idx = st.episodes.indexWhere((e) => e.key == video.key);
     if (idx < 0) return;
+
+    // An automatic binding whose episodeId no longer exists in the remote
+    // catalog is stale: drop it so the current rules can remap the file.
+    // Manual bindings are never revalidated.
+    final savedRef = st.episodes[idx].ref;
+    if (revalidateBinding &&
+        savedRef != null &&
+        catalog.isNotEmpty &&
+        !catalog.any(
+          (anime) => anime.episodes.any(
+            (episode) => episode.episodeId == savedRef.episodeId,
+          ),
+        )) {
+      st.episodes[idx] = ScrapeEpisodeState(
+        key: video.key,
+        fileName: video.fileName,
+        season: video.season,
+        episode: video.episode,
+        status: ScrapeStatus.pending,
+      );
+    }
 
     // 1. Cache check — skip already-scraped episodes unless forced.
     final cached = await repository.hasValidCache(
@@ -744,9 +780,13 @@ class SeriesScraper {
           ? null
           : 'Season ${video.season ?? scope.season}',
     );
-    final indexedEpisode = video.episode == null
-        ? null
-        : video.episode! + _selectedEpisodeOffset;
+    // The user-selected offset applies whether the episode number came from
+    // the library or from the numeric filename rule (`001.mkv`).
+    final indexedEpisode = video.episode != null
+        ? video.episode! + _selectedEpisodeOffset
+        : parsed.isNumbered && _selectedEpisodeOffset != 0
+        ? parsed.episode + _selectedEpisodeOffset
+        : null;
     final info = indexedEpisode == null
         ? parsed
         : EpisodeInfo(

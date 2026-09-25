@@ -18,19 +18,28 @@ void main() {
     if (await directory.exists()) await directory.delete(recursive: true);
   });
 
-  test('clear invalidates old batches and backup recovery stays empty', () async {
-    await repository.applyScanBatch(const ScanBatch(rootId: 'root', generation: '1', isStart: true));
-    final file = _file(id: 'one', rootId: 'root', sourceId: 'files:device');
-    await repository.applyScanBatch(ScanBatch(rootId: 'root', generation: '1', files: [file]));
-    await repository.clearAll();
-    await repository.applyScanBatch(ScanBatch(rootId: 'root', generation: '1', files: [file]));
-    expect((await repository.snapshot()).files, isEmpty);
-    await File('${directory.path}/catalog.json').writeAsString('broken');
-    final restarted = JsonLibraryRepository(storageDirectory: directory);
-    expect((await restarted.snapshot()).files, isEmpty);
-    expect((await restarted.snapshot()).titles, isEmpty);
-    await restarted.close();
-  });
+  test(
+    'clear invalidates old batches and backup recovery stays empty',
+    () async {
+      await repository.applyScanBatch(
+        const ScanBatch(rootId: 'root', generation: '1', isStart: true),
+      );
+      final file = _file(id: 'one', rootId: 'root', sourceId: 'files:device');
+      await repository.applyScanBatch(
+        ScanBatch(rootId: 'root', generation: '1', files: [file]),
+      );
+      await repository.clearAll();
+      await repository.applyScanBatch(
+        ScanBatch(rootId: 'root', generation: '1', files: [file]),
+      );
+      expect((await repository.snapshot()).files, isEmpty);
+      await File('${directory.path}/catalog.json').writeAsString('broken');
+      final restarted = JsonLibraryRepository(storageDirectory: directory);
+      expect((await restarted.snapshot()).files, isEmpty);
+      expect((await restarted.snapshot()).titles, isEmpty);
+      await restarted.close();
+    },
+  );
 
   test('aggregates one title and episode across source versions', () async {
     const title = MediaTitle(
@@ -120,6 +129,67 @@ void main() {
       final data = await repository.snapshot();
       expect(data.versionsForEpisode(episode.id).single.id, 'webdav:176');
       expect(data.availableEpisodeCount(title.id), 1);
+    },
+  );
+
+  test('does not reinterpret a valid manual binding from its filename', () {
+    const expected = LibraryEpisode(
+      id: 'title:s1:e1',
+      titleId: 'title',
+      seasonNumber: 1,
+      episodeNumber: 1,
+      displayName: 'One',
+    );
+    const other = LibraryEpisode(
+      id: 'title:s1:e2',
+      titleId: 'title',
+      seasonNumber: 1,
+      episodeNumber: 2,
+      displayName: 'Two',
+    );
+    final file = _file(
+      id: 'manual',
+      rootId: 'root',
+      sourceId: 'files:device',
+      titleId: 'title',
+      episodeId: expected.id,
+      fileName: 'Show.S01E02.mkv',
+    ).copyWith(matchOrigin: MatchOrigin.manual);
+    final snapshot = LibrarySnapshot(
+      episodes: {expected.id: expected, other.id: other},
+      files: {file.id: file},
+    );
+
+    expect(snapshot.versionsForEpisode(expected.id), [file]);
+    expect(snapshot.versionsForEpisode(other.id), isEmpty);
+  });
+
+  test(
+    'missing files retain their historical root for explicit refresh',
+    () async {
+      await repository.applyScanBatch(
+        const ScanBatch(rootId: 'root', generation: '1', isStart: true),
+      );
+      await repository.applyScanBatch(
+        ScanBatch(
+          rootId: 'root',
+          generation: '1',
+          files: [_file(id: 'gone', rootId: 'root', sourceId: 'files:device')],
+        ),
+      );
+      await repository.applyScanBatch(
+        const ScanBatch(
+          rootId: 'root',
+          generation: '1',
+          isRootComplete: true,
+          seenFileIds: {},
+        ),
+      );
+
+      final file = (await repository.snapshot()).files['gone']!;
+      expect(file.availability, MediaAvailability.missing);
+      expect(file.rootIds, isEmpty);
+      expect(file.historicalRootIds, contains('root'));
     },
   );
 

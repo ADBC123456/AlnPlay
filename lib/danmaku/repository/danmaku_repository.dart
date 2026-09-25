@@ -5,6 +5,7 @@
 // by default (requirement 16); callers pass `forceRefresh: true` to bypass.
 
 import '../source/danmaku_source_registry.dart';
+import '../identity/video_identity.dart';
 import 'danmaku_cache.dart';
 
 /// Outcome of one repository fetch.
@@ -65,14 +66,23 @@ class DanmakuVideoRequest {
 
 /// Cache-first facade over [DanmakuSource]s.
 class DanmakuRepository {
-  DanmakuRepository({required this.cache, DanmakuSourceRegistry? registry})
-    : registry = registry ?? DanmakuSourceRegistry.instance;
+  DanmakuRepository({
+    required this.cache,
+    DanmakuSourceRegistry? registry,
+    DateTime Function()? clock,
+  }) : registry = registry ?? DanmakuSourceRegistry.instance,
+       _clock = clock ?? DateTime.now;
+
+  static const Duration emptyCacheTtl = Duration(minutes: 5);
 
   final DanmakuCache cache;
 
   /// Registry used to resolve [sourceId] -> source. Defaults to the global
   /// singleton; injectable for tests.
   final DanmakuSourceRegistry registry;
+  final DateTime Function() _clock;
+  final Map<String, int> _requestGenerations = {};
+  final Map<String, Future<void>> _writeTails = {};
 
   /// Loads comments for [request] via [sourceId], honoring the cache.
   ///
@@ -96,7 +106,7 @@ class DanmakuRepository {
         baseUrl: baseUrl,
         videoIdentity: request.videoIdentity,
       );
-      if (cached != null) {
+      if (cached != null && _isCacheValid(cached)) {
         _report(
           onProgress,
           DanmakuLoadProgress(
@@ -120,6 +130,11 @@ class DanmakuRepository {
         error: DanmakuSourceException('Unknown danmaku source: $sourceId'),
       );
     }
+    final requestGeneration = _beginRequest(
+      sourceId,
+      baseUrl,
+      request.videoIdentity,
+    );
 
     try {
       _report(
@@ -156,12 +171,18 @@ class DanmakuRepository {
         fileName: request.fileName,
         animeId: match.animeId,
         episodeId: match.episodeId,
-        fetchedAtMs: DateTime.now().millisecondsSinceEpoch,
+        fetchedAtMs: _clock().millisecondsSinceEpoch,
         videoDurationSeconds: comments.videoDurationSeconds,
         appliedShiftSeconds: match.shift.toDouble(),
         comments: shiftedComments,
       );
-      await cache.write(entry);
+      await _writeIfCurrent(
+        sourceId,
+        baseUrl,
+        request.videoIdentity,
+        requestGeneration,
+        entry,
+      );
       return DanmakuFetchResult._(
         status: entry.comments.isEmpty
             ? DanmakuFetchStatus.empty
@@ -194,7 +215,9 @@ class DanmakuRepository {
         baseUrl: baseUrl,
         videoIdentity: request.videoIdentity,
       );
-      if (cached != null && cached.episodeId == episodeId) {
+      if (cached != null &&
+          cached.episodeId == episodeId &&
+          _isCacheValid(cached)) {
         _report(
           onProgress,
           DanmakuLoadProgress(
@@ -218,6 +241,11 @@ class DanmakuRepository {
         error: DanmakuSourceException('Unknown danmaku source: $sourceId'),
       );
     }
+    final requestGeneration = _beginRequest(
+      sourceId,
+      baseUrl,
+      request.videoIdentity,
+    );
 
     try {
       final comments = await _fetchComments(
@@ -234,12 +262,18 @@ class DanmakuRepository {
         fileName: request.fileName,
         animeId: '',
         episodeId: episodeId,
-        fetchedAtMs: DateTime.now().millisecondsSinceEpoch,
+        fetchedAtMs: _clock().millisecondsSinceEpoch,
         videoDurationSeconds: comments.videoDurationSeconds,
         appliedShiftSeconds: shiftSeconds.toDouble(),
         comments: _shiftComments(comments.comments, shiftSeconds),
       );
-      await cache.write(entry);
+      await _writeIfCurrent(
+        sourceId,
+        baseUrl,
+        request.videoIdentity,
+        requestGeneration,
+        entry,
+      );
       return DanmakuFetchResult._(
         status: entry.comments.isEmpty
             ? DanmakuFetchStatus.empty
@@ -271,6 +305,53 @@ class DanmakuRepository {
             likes: comment.likes,
           ),
     ];
+  }
+
+  bool _isCacheValid(DanmakuCacheEntry entry) {
+    if (entry.comments.isNotEmpty) return true;
+    final age = _clock().millisecondsSinceEpoch - entry.fetchedAtMs;
+    return age >= 0 && age < emptyCacheTtl.inMilliseconds;
+  }
+
+  String _operationKey(String sourceId, String baseUrl, String identity) =>
+      '$sourceId\u0000$baseUrl\u0000${normalizeDanmakuIdentityKey(identity)}';
+
+  int _beginRequest(String sourceId, String baseUrl, String identity) {
+    final key = _operationKey(sourceId, baseUrl, identity);
+    return _requestGenerations[key] = (_requestGenerations[key] ?? 0) + 1;
+  }
+
+  bool _isCurrentRequest(
+    String sourceId,
+    String baseUrl,
+    String identity,
+    int generation,
+  ) =>
+      _requestGenerations[_operationKey(sourceId, baseUrl, identity)] ==
+      generation;
+
+  Future<void> _writeIfCurrent(
+    String sourceId,
+    String baseUrl,
+    String identity,
+    int generation,
+    DanmakuCacheEntry entry,
+  ) async {
+    final key = _operationKey(sourceId, baseUrl, identity);
+    final previous = _writeTails[key] ?? Future<void>.value();
+    late final Future<void> operation;
+    operation = previous
+        .catchError((_) {})
+        .then((_) async {
+          if (_isCurrentRequest(sourceId, baseUrl, identity, generation)) {
+            await cache.write(entry);
+          }
+        })
+        .whenComplete(() {
+          if (identical(_writeTails[key], operation)) _writeTails.remove(key);
+        });
+    _writeTails[key] = operation;
+    await operation;
   }
 
   Future<DanmakuSourceComments> _fetchComments(

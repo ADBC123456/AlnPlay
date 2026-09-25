@@ -80,7 +80,7 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
             ? details.seasonForFolder(arc.single)
             : null;
         if (season != null) {
-          return _resolveFromFolderMatch(
+          return await _resolveFromFolderMatch(
             file,
             context,
             folderMeta.withDetails(details),
@@ -343,8 +343,9 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
     _sharedSearches[key] = future;
     try {
       return await future;
-    } finally {
+    } catch (_) {
       _sharedSearches.remove(key);
+      rethrow;
     }
   }
 
@@ -363,8 +364,9 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
     _sharedDetails[key] = future;
     try {
       return await future;
-    } finally {
+    } catch (_) {
       _sharedDetails.remove(key);
+      rethrow;
     }
   }
 
@@ -377,8 +379,9 @@ class TmdbLibraryMetadataResolver implements MetadataResolver {
     _sharedSeasons[key] = future;
     try {
       return await future;
-    } finally {
+    } catch (_) {
       _sharedSeasons.remove(key);
+      rethrow;
     }
   }
 

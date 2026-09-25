@@ -195,6 +195,53 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  testWidgets('unknown-only season opens without a blank screen', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    const title = MediaTitle(
+      id: 'tmdb:tv:凡人',
+      kind: MediaTitleKind.tv,
+      tmdbId: 1,
+      displayTitle: '凡人',
+    );
+    const episode = LibraryEpisode(
+      id: 'tmdb:tv:凡人:sunknown:e1',
+      titleId: 'tmdb:tv:凡人',
+      seasonNumber: null,
+      episodeNumber: 1,
+      displayName: '第一集',
+    );
+    final library = UnifiedLibraryService.instance;
+    final previous = library.snapshot;
+    library.snapshot = LibrarySnapshot(
+      titles: const {'tmdb:tv:凡人': title},
+      episodes: const {'tmdb:tv:凡人:sunknown:e1': episode},
+      files: {
+        'unknown-season-file': MediaFile(
+          id: 'unknown-season-file',
+          rootIds: const {'root'},
+          sourceRef: _source,
+          originalFileName: '凡人.001.mp4',
+          titleId: 'tmdb:tv:凡人',
+          episodeId: 'tmdb:tv:凡人:sunknown:e1',
+          availability: MediaAvailability.available,
+          legacyResumeKey: 'unknown-season-file',
+        ),
+      },
+    );
+    addTearDown(() => library.snapshot = previous);
+
+    await tester.pumpWidget(
+      const MaterialApp(home: UnifiedTitleDetailsScreen(titleId: 'tmdb:tv:凡人')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('凡人'), findsOneWidget);
+    expect(find.text('1. 第一集'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 const _title = MediaTitle(

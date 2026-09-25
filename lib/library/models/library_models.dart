@@ -196,6 +196,7 @@ class MediaFile {
   const MediaFile({
     required this.id,
     required this.rootIds,
+    this.historicalRootIds = const {},
     required this.sourceRef,
     required this.originalFileName,
     this.sizeBytes,
@@ -213,6 +214,7 @@ class MediaFile {
 
   final String id;
   final Set<String> rootIds;
+  final Set<String> historicalRootIds;
   final MediaSourceRef sourceRef;
   final String originalFileName;
   final int? sizeBytes;
@@ -231,6 +233,7 @@ class MediaFile {
 
   MediaFile copyWith({
     Set<String>? rootIds,
+    Set<String>? historicalRootIds,
     Object? titleId = _unset,
     Object? episodeId = _unset,
     MatchOrigin? matchOrigin,
@@ -240,6 +243,7 @@ class MediaFile {
   }) => MediaFile(
     id: id,
     rootIds: rootIds ?? this.rootIds,
+    historicalRootIds: historicalRootIds ?? this.historicalRootIds,
     sourceRef: sourceRef,
     originalFileName: originalFileName,
     sizeBytes: sizeBytes,
@@ -260,6 +264,7 @@ class MediaFile {
   Map<String, dynamic> toJson() => {
     'id': id,
     'rootIds': rootIds.toList()..sort(),
+    'historicalRootIds': historicalRootIds.toList()..sort(),
     'sourceRef': sourceRef.toJson(),
     'originalFileName': originalFileName,
     if (sizeBytes != null) 'sizeBytes': sizeBytes,
@@ -279,6 +284,12 @@ class MediaFile {
   factory MediaFile.fromJson(Map<String, dynamic> json) => MediaFile(
     id: json['id'] as String? ?? '',
     rootIds: (json['rootIds'] as List? ?? const []).whereType<String>().toSet(),
+    historicalRootIds:
+        (json['historicalRootIds'] as List? ??
+                json['rootIds'] as List? ??
+                const [])
+            .whereType<String>()
+            .toSet(),
     sourceRef: MediaSourceRef.fromJson(
       (json['sourceRef'] as Map? ?? const {}).cast<String, dynamic>(),
     ),

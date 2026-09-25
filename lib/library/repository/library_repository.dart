@@ -51,6 +51,9 @@ class SearchResult {
   final List<LibrarySearchHit> hits;
 }
 
+final Expando<_LibrarySnapshotIndex> _snapshotIndexes =
+    Expando<_LibrarySnapshotIndex>('librarySnapshotIndex');
+
 class LibrarySnapshot {
   const LibrarySnapshot({
     this.titles = const {},
@@ -66,46 +69,105 @@ class LibrarySnapshot {
   final Map<String, LibraryOverride> overrides;
   final Set<String> damagedSourceIds;
 
-  List<MediaFile> filesForTitle(String titleId) => files.values
-      .where((file) => file.titleId == titleId)
-      .toList(growable: false);
+  _LibrarySnapshotIndex get _index =>
+      _snapshotIndexes[this] ??= _LibrarySnapshotIndex(this);
 
-  List<MediaFile> versionsForEpisode(String episodeId) {
-    final exact = files.values
-        .where(
-          (file) =>
-              file.episodeId == episodeId &&
-              file.availability != MediaAvailability.missing,
-        )
-        .toList(growable: false);
-    if (exact.isNotEmpty) return exact;
+  List<MediaFile> filesForTitle(String titleId) =>
+      _index.filesByTitle[titleId] ?? const [];
 
-    // Older indexes can retain a stale/unknown episode id after a metadata
-    // migration even though the title binding and filename are still valid.
-    // Reconcile explicit SxxEyy filenames at read time so those files remain
-    // playable until the next scan rewrites their canonical episode id.
-    final episode = episodes[episodeId];
-    if (episode == null || episode.seasonNumber == null) return exact;
-    return files.values.where((file) {
-      if (file.titleId != episode.titleId ||
-          file.availability == MediaAvailability.missing) {
-        return false;
-      }
-      final parsed = ParsedFileName.parse(file.originalFileName);
-      return parsed.isEpisode &&
-          parsed.seasonKnown &&
-          parsed.season == episode.seasonNumber &&
-          parsed.episode == episode.episodeNumber;
-    }).toList(growable: false);
+  List<MediaFile> versionsForEpisode(String episodeId) =>
+      _index.versionsByEpisode[episodeId] ?? const [];
+
+  int availableEpisodeCount(String titleId) =>
+      _index.availableEpisodeCounts[titleId] ?? 0;
+}
+
+class _LibrarySnapshotIndex {
+  _LibrarySnapshotIndex(this.snapshot)
+    : filesByTitle = _indexFilesByTitle(snapshot),
+      versionsByEpisode = _indexVersionsByEpisode(snapshot) {
+    availableEpisodeCounts = _indexAvailableEpisodeCounts(snapshot);
   }
 
-  int availableEpisodeCount(String titleId) => episodes.values
-      .where(
-        (episode) =>
-            episode.titleId == titleId &&
-            versionsForEpisode(episode.id).isNotEmpty,
-      )
-      .length;
+  final LibrarySnapshot snapshot;
+  final Map<String, List<MediaFile>> filesByTitle;
+  final Map<String, List<MediaFile>> versionsByEpisode;
+  late final Map<String, int> availableEpisodeCounts;
+
+  static Map<String, List<MediaFile>> _indexFilesByTitle(
+    LibrarySnapshot snapshot,
+  ) {
+    final result = <String, List<MediaFile>>{};
+    for (final file in snapshot.files.values) {
+      final titleId = file.titleId;
+      if (titleId != null) (result[titleId] ??= []).add(file);
+    }
+    return {
+      for (final entry in result.entries)
+        entry.key: List.unmodifiable(entry.value),
+    };
+  }
+
+  static Map<String, List<MediaFile>> _indexVersionsByEpisode(
+    LibrarySnapshot snapshot,
+  ) {
+    final result = <String, List<MediaFile>>{};
+    final unresolved = <String, List<MediaFile>>{};
+    for (final file in snapshot.files.values) {
+      if (file.availability == MediaAvailability.missing) continue;
+      final episodeId = file.episodeId;
+      if (episodeId != null && snapshot.episodes.containsKey(episodeId)) {
+        (result[episodeId] ??= []).add(file);
+        continue;
+      }
+      // Manual bindings are authoritative even when their referenced episode
+      // is temporarily absent. Never reinterpret them from the filename.
+      if (file.matchOrigin == MatchOrigin.manual || file.titleId == null) {
+        continue;
+      }
+      (unresolved[file.titleId!] ??= []).add(file);
+    }
+
+    // Parse each fallback candidate once per snapshot. Only explicit SxxEyy
+    // names are eligible, and only when the stored episode id is absent/stale.
+    final episodesByCoordinate = <String, String>{};
+    for (final episode in snapshot.episodes.values) {
+      final season = episode.seasonNumber;
+      if (season != null) {
+        episodesByCoordinate['${episode.titleId}:s$season:e${episode.episodeNumber}'] =
+            episode.id;
+      }
+    }
+    for (final entry in unresolved.entries) {
+      for (final file in entry.value) {
+        // Reuse the same ancestor-aware rules used during scanning. A stale
+        // file from a show root may only be named `001.mkv`; parsing without
+        // ancestors would miss its default Season 1 coordinate.
+        final parsed = ParsedFileName.parseWithAncestors(
+          file.originalFileName,
+          const <String>[],
+        );
+        if (!parsed.isEpisode || !parsed.seasonKnown) continue;
+        final target =
+            episodesByCoordinate['${entry.key}:s${parsed.season}:e${parsed.episode}'];
+        if (target != null) (result[target] ??= []).add(file);
+      }
+    }
+    return {
+      for (final entry in result.entries)
+        entry.key: List.unmodifiable(entry.value),
+    };
+  }
+
+  Map<String, int> _indexAvailableEpisodeCounts(LibrarySnapshot snapshot) {
+    final result = <String, int>{};
+    for (final episode in snapshot.episodes.values) {
+      if ((versionsByEpisode[episode.id] ?? const []).isNotEmpty) {
+        result[episode.titleId] = (result[episode.titleId] ?? 0) + 1;
+      }
+    }
+    return result;
+  }
 }
 
 abstract interface class LibraryRepository {
@@ -215,6 +277,7 @@ class JsonLibraryRepository implements LibraryRepository {
       };
       files[discovered.id] = discovered.copyWith(
         rootIds: roots,
+        historicalRootIds: {...?previous?.historicalRootIds, ...roots},
         titleId: keepPreviousBinding ? previous!.titleId : discovered.titleId,
         episodeId: keepPreviousBinding
             ? previous!.episodeId
@@ -242,6 +305,7 @@ class JsonLibraryRepository implements LibraryRepository {
         final roots = Set<String>.of(file.rootIds)..remove(batch.rootId);
         files[entry.key] = file.copyWith(
           rootIds: roots,
+          historicalRootIds: {...file.historicalRootIds, batch.rootId},
           availability: roots.isEmpty
               ? MediaAvailability.missing
               : file.availability,

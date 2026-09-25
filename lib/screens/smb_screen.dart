@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/video_item.dart';
-import '../services/library_folders.dart';
 import '../services/simkl_client.dart';
 import '../services/smb_client.dart';
 import '../services/tmdb_client.dart';
@@ -199,36 +198,6 @@ class _SmbScreenState extends State<SmbScreen> {
   }
 
   bool _syncingSimkl = false;
-
-  Future<void> _bookmarkCurrentFolder() async {
-    final server = _browsing;
-    if (server == null || _share.isEmpty) return;
-    final cleanPath = _path.replaceAll(RegExp(r'/+$'), '');
-    final folderName = cleanPath.isEmpty ? _share : cleanPath.split('/').last;
-    final repoPath = cleanPath.isEmpty ? _share : '$_share/$cleanPath';
-    final id = 'smb_${server.id}_${repoPath.hashCode}';
-    final folder = LibraryFolder(
-      id: id,
-      name: folderName,
-      path: 'smb:${server.id}/$repoPath',
-      addedAt: DateTime.now(),
-      source: LibraryFolderSource.smb,
-      networkServerId: server.id,
-      networkShare: _share,
-      networkPath: cleanPath,
-      networkLabel: server.name,
-    );
-    await LibraryFoldersStore.add(folder);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: AppText(
-            'Bookmarked $folderName to Home (SMB · ${server.name})',
-          ),
-        ),
-      );
-    }
-  }
 
   Future<void> _syncFromSimkl() async {
     final client = SimklClient();
@@ -611,12 +580,6 @@ class _SmbScreenState extends State<SmbScreen> {
               )
             : null,
         actions: [
-          if (browsing != null && _share.isNotEmpty && !_loading)
-            IconButton(
-              tooltip: context.tr('Bookmark this folder to Home'),
-              icon: const Icon(Icons.bookmark_add_outlined),
-              onPressed: _bookmarkCurrentFolder,
-            ),
           if (browsing != null && _share.isNotEmpty && !_loading)
             IconButton(
               tooltip: context.tr('Sync watched from SIMKL'),

@@ -8,9 +8,9 @@ import 'package:flutter/rendering.dart';
 
 Size _lensScale(double position, double pressure, bool reduceMotion) => Size(
   1 +
-      .12 * pressure +
+      (.12 + .08 * LiquidGlassDock.elasticity) * pressure +
       (reduceMotion ? 0 : .04 * math.sin((position % 1) * math.pi).abs()),
-  1 + .22 * pressure,
+  1 + (.22 + .14 * LiquidGlassDock.elasticity) * pressure,
 );
 
 /// Root navigation with a movable glass lens and a separate search action.
@@ -32,6 +32,19 @@ class LiquidGlassDock extends StatefulWidget {
   final List<String> labels;
   final String searchLabel;
   final bool searchActive;
+
+  /// Tuned to the public `liquid-glass-react` controls.  Keeping the values
+  /// here makes the port auditable and prevents the shader and gesture code
+  /// from drifting apart when the visual treatment is adjusted later.
+  static const double displacementScale = 200;
+  static const double blurAmount = 0;
+  static const double saturation = 150;
+  static const double aberrationIntensity = 9;
+  static const double elasticity = .55;
+
+  /// The dock shell has its own frosted backdrop.  `blurAmount` belongs to
+  /// the moving lens, while this value is the Gaussian frosting behind it.
+  static const double dockBackdropBlurSigma = 18;
 
   static const double maxWidth = 560;
   static double heightFor(TextScaler textScaler) =>
@@ -55,8 +68,10 @@ class _LiquidGlassDockState extends State<LiquidGlassDock>
   ];
   static final _spring = SpringDescription.withDampingRatio(
     mass: 1,
-    stiffness: 420,
-    ratio: .85,
+    // Higher elasticity means a softer return.  .55 maps to a responsive
+    // spring that still has a visible, short Q-bounce on release.
+    stiffness: 420 * (1 - LiquidGlassDock.elasticity * .22),
+    ratio: .85 - LiquidGlassDock.elasticity * .08,
   );
 
   // Slot coordinates survive window resizing without a pixel-position jump.
@@ -347,18 +362,27 @@ class _LiquidGlassDockState extends State<LiquidGlassDock>
                                                       index - _position.value;
                                                   final proximity =
                                                       (1 - delta.abs()).clamp(
-                                                        0,
-                                                        1,
+                                                        0.0,
+                                                        1.0,
                                                       );
+                                                  final pressure =
+                                                      _pressure.value *
+                                                      proximity;
+                                                  // Keep this function smooth
+                                                  // through delta == 0. A
+                                                  // sign based offset flips
+                                                  // at the center and makes
+                                                  // the label jump while the
+                                                  // lens crosses it.
                                                   return Transform.translate(
                                                     offset: Offset(
-                                                      delta.sign *
-                                                          proximity *
-                                                          _pressure.value *
-                                                          5,
+                                                      delta * pressure * 5,
                                                       0,
                                                     ),
-                                                    child: child,
+                                                    child: Transform.scale(
+                                                      scale: 1 + pressure * .08,
+                                                      child: child,
+                                                    ),
                                                   );
                                                 },
                                                 child: Center(
@@ -486,21 +510,22 @@ class _GlassSurface extends StatefulWidget {
 class _GlassSurfaceState extends State<_GlassSurface> {
   static Future<ui.FragmentProgram>? _program;
   static final _lensBlur = ui.ImageFilter.blur(
-    sigmaX: .6,
-    sigmaY: .6,
+    sigmaX: LiquidGlassDock.dockBackdropBlurSigma,
+    sigmaY: LiquidGlassDock.dockBackdropBlurSigma,
     tileMode: TileMode.clamp,
   );
   static final _dockBlur = ui.ImageFilter.blur(
-    sigmaX: 18,
-    sigmaY: 18,
+    sigmaX: LiquidGlassDock.dockBackdropBlurSigma,
+    sigmaY: LiquidGlassDock.dockBackdropBlurSigma,
     tileMode: TileMode.clamp,
   );
   ui.FragmentShader? _shader;
-
   @override
   void initState() {
     super.initState();
-    if (widget.lens && ui.ImageFilter.isShaderFilterSupported) _loadShader();
+    if (widget.lens && ui.ImageFilter.isShaderFilterSupported) {
+      _loadShader();
+    }
   }
 
   Future<void> _loadShader() async {
@@ -510,7 +535,7 @@ class _GlassSurfaceState extends State<_GlassSurface> {
       ));
       if (mounted) setState(() => _shader = program.fragmentShader());
     } catch (_) {
-      // Unsupported backends and asset failures retain live uniform blur.
+      // Keep the blurred material fallback on unsupported renderers.
     }
   }
 
@@ -538,15 +563,29 @@ class _GlassSurfaceState extends State<_GlassSurface> {
             pressure: widget.pressure,
             lightX: widget.lightX,
           ),
-          child: const SizedBox.expand(),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: widget.lens
+                  ? (dark
+                        ? Colors.black.withValues(alpha: .62)
+                        : Colors.white.withValues(alpha: .58))
+                  : Colors.transparent,
+            ),
+            child: const SizedBox.expand(),
+          ),
         );
-        final filtered = shader != null && !highContrast
+        final filtered = widget.lens && (shader == null || highContrast)
+            ? material
+            : shader != null && !highContrast
             ? _GlassBackdrop(
                 shader: shader,
                 baseBlur: baseBlur,
                 viewport: MediaQuery.sizeOf(context),
-                dispersion: 1,
-                refraction: 6 + widget.pressure * 4,
+                displacementScale: LiquidGlassDock.displacementScale,
+                aberrationIntensity: LiquidGlassDock.aberrationIntensity,
+                saturation: LiquidGlassDock.saturation,
+                elasticity: LiquidGlassDock.elasticity,
+                pressure: widget.pressure,
                 child: material,
               )
             : BackdropFilter(
@@ -648,15 +687,21 @@ class _GlassBackdrop extends SingleChildRenderObjectWidget {
     required this.shader,
     required this.baseBlur,
     required this.viewport,
-    required this.dispersion,
-    required this.refraction,
+    required this.displacementScale,
+    required this.aberrationIntensity,
+    required this.saturation,
+    required this.elasticity,
+    required this.pressure,
     required super.child,
   });
   final ui.FragmentShader shader;
   final ui.ImageFilter baseBlur;
   final Size viewport;
-  final double dispersion;
-  final double refraction;
+  final double displacementScale;
+  final double aberrationIntensity;
+  final double saturation;
+  final double elasticity;
+  final double pressure;
 
   @override
   _RenderGlassBackdrop createRenderObject(BuildContext context) =>
@@ -691,12 +736,18 @@ class _RenderGlassBackdrop extends RenderProxyBox {
     config.shader
       ..setFloat(2, rect.width)
       ..setFloat(3, rect.height)
-      ..setFloat(4, config.dispersion)
-      ..setFloat(5, config.refraction)
+      // The React version expresses these as CSS/SVG pixels.  The Flutter
+      // shader receives the same public values and converts them to a
+      // viewport-normalized offset at the final sampling step.
+      ..setFloat(4, config.displacementScale)
+      ..setFloat(5, config.aberrationIntensity)
       ..setFloat(6, rect.left)
       ..setFloat(7, rect.top)
       ..setFloat(8, config.viewport.width)
-      ..setFloat(9, config.viewport.height);
+      ..setFloat(9, config.viewport.height)
+      ..setFloat(10, config.saturation)
+      ..setFloat(11, config.elasticity)
+      ..setFloat(12, config.pressure);
     final layer = _backdropLayer.layer ??= BackdropFilterLayer();
     layer.filter = ui.ImageFilter.compose(
       outer: ui.ImageFilter.shader(config.shader),

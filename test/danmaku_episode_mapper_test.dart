@@ -4,6 +4,32 @@ import 'package:dream_player/danmaku/scraper/episode_mapper.dart';
 
 void main() {
   group('DanmakuEpisodeParser', () {
+    test('numeric first segment is the episode, season from folder', () {
+      for (final name in ['001.mkv', '001 - 标题.mkv', '001_1080p.mkv']) {
+        final info = DanmakuEpisodeParser.parse(name);
+        expect(info.source, EpisodeSource.bareNumber, reason: name);
+        expect(info.season, 1, reason: name);
+        expect(info.episode, 1, reason: name);
+      }
+      expect(DanmakuEpisodeParser.parse('001 - Part 2.mkv').episode, 1);
+      for (final folder in ['Season 2', 'S02', '第二季', '第2季']) {
+        final info = DanmakuEpisodeParser.parse('001.mkv', folderName: folder);
+        expect(info.season, 2, reason: folder);
+        expect(info.episode, 1, reason: folder);
+      }
+    });
+
+    test('years, resolutions and middle numbers are not episodes', () {
+      expect(DanmakuEpisodeParser.parse('2024.mkv').isEpisode, isFalse);
+      expect(DanmakuEpisodeParser.parse('24.2016.1080p.mkv').isEpisode, isFalse);
+      expect(DanmakuEpisodeParser.parse('Movie.1080p.mkv').isEpisode, isFalse);
+      expect(
+        DanmakuEpisodeParser.parse('Show 3 Title [WEB].mkv').isEpisode,
+        isFalse,
+      );
+      expect(DanmakuEpisodeParser.parse('2 Broke Girls - 05.mkv').episode, 5);
+    });
+
     test('S01E01 / S1E1 season+episode', () {
       final a = DanmakuEpisodeParser.parse('Show.S01E01.mkv');
       expect(a.source, EpisodeSource.seasonEpisode);
@@ -61,9 +87,29 @@ void main() {
       expect(b.isEpisode, isFalse);
     });
 
+    test('bare numeric names default to Season 1 and support release suffixes', () {
+      for (final fileName in ['001.mkv', '001 - title.mkv', '001_1080p.mkv']) {
+        final parsed = DanmakuEpisodeParser.parse(fileName);
+        expect(parsed.source, EpisodeSource.bareNumber, reason: fileName);
+        expect(parsed.season, 1, reason: fileName);
+        expect(parsed.episode, 1, reason: fileName);
+      }
+    });
+
+    test('bare release years are not treated as episodes', () {
+      for (final fileName in ['2024.mkv', '2024_1080p.mkv']) {
+        expect(
+          DanmakuEpisodeParser.parse(fileName).isEpisode,
+          isFalse,
+          reason: fileName,
+        );
+      }
+    });
+
     test('Show - 05.mkv bare trailing number', () {
       final a = DanmakuEpisodeParser.parse('Show - 05.mkv');
       expect(a.source, EpisodeSource.bareNumber);
+      expect(a.season, 1);
       expect(a.episode, 5);
       expect(a.seriesName, 'Show');
     });

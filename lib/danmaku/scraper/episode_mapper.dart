@@ -115,12 +115,21 @@ class DanmakuEpisodeParser {
     caseSensitive: false,
   );
 
-  /// Bare trailing number: `Show - 05.mkv`, `01.mkv`, `Show 03`.
-  /// Requires the number to be delimited by separators so `1080p` and
-  /// `Gundam 00` don't match.
+  /// Bare trailing number: `Show - 05.mkv`, `Show 03`. Requires the number
+  /// to be delimited by separators so `1080p` and mid-title numbers don't
+  /// match.
   static final RegExp _bareNumber = RegExp(
-    r'(?:^|[\s\.\-\_])((?:\d{1,4}))(?=$|[\s\.\-\_])',
+    r'(?:^|[\s\.\-\_])((?:\d{1,4}))$',
   );
+
+  /// Leading numeric first segment: `001.mkv`, `001 - Title`, `001_1080p`.
+  /// Mirrors `ParsedFileName`'s leading rule so the library and danmaku agree
+  /// on the episode number; `2 Broke Girls - 05` still uses the trailing rule.
+  static final RegExp _leadingNumber = RegExp(
+    r'^\s*[\[\(]?\s*(\d{1,4})\s*[\]\)]?(?=\s*$|\s*[-_.])',
+  );
+
+  static final RegExp _year = RegExp(r'\b(18|19|20)\d{2}\b');
 
   /// Special markers. Same grouping rule as [_epMarker]: the separator
   /// alternation must be a self-contained group before the marker kind
@@ -221,12 +230,41 @@ class DanmakuEpisodeParser {
     // caller says the listing is episode-shaped (a season folder, a show
     // folder…) — in a mixed movie folder `01.mkv` is ambiguous.
     if (trustedBareNumber) {
-      final bare = _bareNumber.firstMatch(name);
-      if (bare != null) {
+      final leading = _leadingNumber.firstMatch(name);
+      final leadingNumber = leading == null
+          ? null
+          : int.parse(leading.group(1)!);
+      // A leading number next to a release year (`24.2016`, `9 (2009)`) is
+      // a movie name, not an episode prefix.
+      if (leadingNumber != null &&
+          !(leadingNumber >= 1800 && leadingNumber <= 2099) &&
+          !_year.hasMatch(name)) {
+        final folderSeason = _seasonFromFolder(folderName);
         return EpisodeInfo(
           source: EpisodeSource.bareNumber,
-          season: _seasonFromFolder(folderName),
-          episode: int.parse(bare.group(1)!),
+          season: folderSeason == 0 ? 1 : folderSeason,
+          episode: leadingNumber,
+          seriesName: _seriesFromFolder(folderName),
+        );
+      }
+      final bare = leading != null ? null : _bareNumber.firstMatch(name);
+      if (bare != null) {
+        final episodeNumber = int.parse(bare.group(1)!);
+        final folderSeason = _seasonFromFolder(folderName);
+        // A standalone four-digit year is overwhelmingly a movie or a
+        // release year, not an episode. Keep the numeric rule useful for
+        // `001`/`146` while avoiding `2024.mkv` false positives.
+        if (episodeNumber >= 1800 && episodeNumber <= 2099) {
+          return EpisodeInfo(
+            season: folderSeason,
+            seriesName:
+                _seriesBefore(name, bare.start) ?? _seriesFromFolder(folderName),
+          );
+        }
+        return EpisodeInfo(
+          source: EpisodeSource.bareNumber,
+          season: folderSeason == 0 ? 1 : folderSeason,
+          episode: episodeNumber,
           seriesName:
               _seriesBefore(name, bare.start) ?? _seriesFromFolder(folderName),
         );

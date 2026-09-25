@@ -241,12 +241,13 @@ class DanmakuService {
     }
 
     late final Future<DanmakuLoadOutcome> future;
-    future = _load(identity, metadata, report).whenComplete(() {
-      if (identical(_inFlight[key], future)) {
-        _inFlight.remove(key);
-        _progressListeners.remove(key);
-      }
-    });
+    future = _load(identity, metadata, report, forceRefresh: forceRefresh)
+        .whenComplete(() {
+          if (identical(_inFlight[key], future)) {
+            _inFlight.remove(key);
+            _progressListeners.remove(key);
+          }
+        });
     _inFlight[key] = future;
     return future;
   }
@@ -254,8 +255,9 @@ class DanmakuService {
   Future<DanmakuLoadOutcome> _load(
     vid.VideoIdentity identity,
     VideoMetadataContext? metadata,
-    DanmakuProgressCallback onProgress,
-  ) async {
+    DanmakuProgressCallback onProgress, {
+    required bool forceRefresh,
+  }) async {
     if (!enabled) {
       return const DanmakuLoadOutcome._(status: DanmakuStatus.idle);
     }
@@ -307,6 +309,7 @@ class DanmakuService {
         ),
         episodeId: binding.ref.episodeId,
         shiftSeconds: binding.ref.shift,
+        forceRefresh: forceRefresh,
         onProgress: onProgress,
       );
       switch (result.status) {
@@ -314,16 +317,23 @@ class DanmakuService {
         case DanmakuFetchStatus.fromNetwork:
           return _outcomeFrom(result);
         case DanmakuFetchStatus.empty:
-          return const DanmakuLoadOutcome._(status: DanmakuStatus.empty);
+          sawEmpty = true;
+          break;
         case DanmakuFetchStatus.noMatch:
           sawNoMatch = true;
+          break;
         case DanmakuFetchStatus.failed:
           sawFailure = true;
+          break;
       }
     }
     if (foundBinding) {
       return DanmakuLoadOutcome._(
-        status: sawFailure ? DanmakuStatus.failed : DanmakuStatus.noMatch,
+        status: sawFailure
+            ? DanmakuStatus.failed
+            : sawEmpty
+            ? DanmakuStatus.empty
+            : DanmakuStatus.noMatch,
       );
     }
 
@@ -338,6 +348,7 @@ class DanmakuService {
           fileSize: identity.fileSize,
           videoKey: identity.stableKey,
         ),
+        forceRefresh: forceRefresh,
         onProgress: onProgress,
       );
       if (result.status == DanmakuFetchStatus.noMatch && metadata != null) {
@@ -346,8 +357,27 @@ class DanmakuService {
           identity,
           metadata,
           onProgress,
+          forceRefresh: forceRefresh,
         );
-        if (scraped != null) return scraped;
+        if (scraped != null) {
+          switch (scraped.status) {
+            case DanmakuStatus.ready:
+              return scraped;
+            case DanmakuStatus.empty:
+              sawEmpty = true;
+              break;
+            case DanmakuStatus.failed:
+              sawFailure = true;
+              break;
+            case DanmakuStatus.noMatch:
+              sawNoMatch = true;
+              break;
+            case DanmakuStatus.idle:
+            case DanmakuStatus.loading:
+              break;
+          }
+          continue;
+        }
       }
       switch (result.status) {
         case DanmakuFetchStatus.fromCache:
@@ -355,11 +385,17 @@ class DanmakuService {
           return _outcomeFrom(result);
         case DanmakuFetchStatus.empty:
           sawEmpty = true;
+          break;
         case DanmakuFetchStatus.noMatch:
           sawNoMatch = true;
+          break;
         case DanmakuFetchStatus.failed:
           sawFailure = true;
+          break;
       }
+    }
+    if (sawFailure) {
+      return const DanmakuLoadOutcome._(status: DanmakuStatus.failed);
     }
     if (sawEmpty) {
       return const DanmakuLoadOutcome._(status: DanmakuStatus.empty);
@@ -367,17 +403,16 @@ class DanmakuService {
     if (sawNoMatch) {
       return const DanmakuLoadOutcome._(status: DanmakuStatus.noMatch);
     }
-    return DanmakuLoadOutcome._(
-      status: sawFailure ? DanmakuStatus.failed : DanmakuStatus.noMatch,
-    );
+    return const DanmakuLoadOutcome._(status: DanmakuStatus.noMatch);
   }
 
   Future<DanmakuLoadOutcome?> _loadFromMetadata(
     DanmakuSourceConfig source,
     vid.VideoIdentity identity,
     VideoMetadataContext metadata,
-    DanmakuProgressCallback onProgress,
-  ) async {
+    DanmakuProgressCallback onProgress, {
+    required bool forceRefresh,
+  }) async {
     final episodeNumber = metadata.episodeNumber;
     if (episodeNumber == null || episodeNumber <= 0) return null;
     final titles = <String>[
@@ -426,6 +461,7 @@ class DanmakuService {
             videoKey: identity.stableKey,
           ),
           episodeId: candidates.single.episodeId,
+          forceRefresh: forceRefresh,
           onProgress: onProgress,
         );
         return _outcomeFrom(result);

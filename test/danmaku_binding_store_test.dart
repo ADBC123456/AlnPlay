@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:dream_player/danmaku/binding/danmaku_binding_store.dart';
+import 'package:dream_player/danmaku/identity/video_identity.dart';
 import 'package:dream_player/danmaku/scraper/scrape_state.dart';
 
 const _scope = SeriesScope(
@@ -106,5 +109,44 @@ void main() {
 
     final loaded = await DanmakuBindingStore.loadForScope(_scope);
     expect(loaded.keys, ['video-2']);
+  });
+
+  test('legacy raw keys remain readable and migrate on write', () async {
+    final legacy = DanmakuBinding(
+      sourceId: _scope.sourceId,
+      sourceBaseUrl: _scope.sourceBaseUrl,
+      videoIdentity: 'video-1',
+      ref: const DanmakuEpisodeRef(animeId: 'a', episodeId: 'legacy'),
+      updatedAtMs: 1,
+      manual: true,
+    );
+    final sourceKey = jsonEncode(<String>[
+      _scope.sourceId,
+      'https://danmaku.example/api',
+    ]);
+    SharedPreferences.setMockInitialValues({
+      'dreamplayer.danmakuBindings.v1': jsonEncode({
+        'schemaVersion': 1,
+        'sources': {
+          sourceKey: {'video-1': legacy.toJson()},
+        },
+      }),
+    });
+
+    final loaded = await DanmakuBindingStore.load(
+      sourceId: _scope.sourceId,
+      sourceBaseUrl: _scope.sourceBaseUrl,
+      videoIdentity: normalizeDanmakuIdentityKey('video-1'),
+    );
+    expect(loaded?.ref.episodeId, 'legacy');
+
+    await DanmakuBindingStore.save(
+      _scope,
+      'video-1',
+      const DanmakuEpisodeRef(animeId: 'a', episodeId: 'current'),
+    );
+    final all = await DanmakuBindingStore.loadForScope(_scope);
+    expect(all.keys, ['video-1']);
+    expect(all.values.single.ref.episodeId, 'current');
   });
 }

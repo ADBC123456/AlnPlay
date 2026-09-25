@@ -21,6 +21,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../services/cache_quota_manager.dart';
 
 import '../source/danmaku_source_registry.dart';
+import '../identity/video_identity.dart';
 
 /// Bump when the on-disk entry format changes; old entries become unreadable
 /// (different file name) and are re-fetched.
@@ -152,11 +153,22 @@ class DanmakuCache {
     required String baseUrl,
     required String videoIdentity,
   }) {
+    final identity = normalizeDanmakuIdentityKey(videoIdentity);
     return '$sourceId/'
         '${hashIdentity(baseUrl)}/'
-        '${hashIdentity(videoIdentity)}/'
+        '${hashIdentity(identity)}/'
         'v$kDanmakuCacheSchemaVersion';
   }
+
+  static String _legacyKeyFor({
+    required String sourceId,
+    required String baseUrl,
+    required String videoIdentity,
+  }) =>
+      '$sourceId/'
+      '${hashIdentity(baseUrl)}/'
+      '${hashIdentity(legacyDanmakuIdentityKey(videoIdentity))}/'
+      'v$kDanmakuCacheSchemaVersion';
 
   String _filePath(String key) {
     final root = _requireRoot;
@@ -181,22 +193,34 @@ class DanmakuCache {
       baseUrl: baseUrl,
       videoIdentity: videoIdentity,
     );
-    final memo = _memory[key];
-    if (memo != null) {
-      if (_useQuota) await CacheQuotaManager.instance.touch(_filePath(key));
-      return memo;
+    final legacyKey = _legacyKeyFor(
+      sourceId: sourceId,
+      baseUrl: baseUrl,
+      videoIdentity: videoIdentity,
+    );
+    for (final candidateKey in <String>{key, legacyKey}) {
+      final memo = _memory[candidateKey];
+      if (memo != null) {
+        if (_useQuota) {
+          await CacheQuotaManager.instance.touch(_filePath(candidateKey));
+        }
+        return memo;
+      }
     }
     try {
-      final file = File(_filePath(key));
-      if (!await file.exists()) return null;
-      final text = await file.readAsString();
-      if (_useQuota) await CacheQuotaManager.instance.touch(file.path);
-      final decoded = jsonDecode(text);
-      if (decoded is! Map<String, dynamic>) return null;
-      final entry = DanmakuCacheEntry.fromJson(decoded);
-      if (entry == null) return null;
-      _memory[key] = entry;
-      return entry;
+      for (final candidateKey in <String>{key, legacyKey}) {
+        final file = File(_filePath(candidateKey));
+        if (!await file.exists()) continue;
+        final text = await file.readAsString();
+        if (_useQuota) await CacheQuotaManager.instance.touch(file.path);
+        final decoded = jsonDecode(text);
+        if (decoded is! Map<String, dynamic>) continue;
+        final entry = DanmakuCacheEntry.fromJson(decoded);
+        if (entry == null) continue;
+        _memory[candidateKey] = entry;
+        return entry;
+      }
+      return null;
     } on FileSystemException catch (e) {
       _log('cache read failed: ${e.message}');
       return null;
@@ -211,18 +235,30 @@ class DanmakuCache {
   /// Writes [entry] atomically: temp file in the same directory, flush, then
   /// rename over the final name.
   Future<void> write(DanmakuCacheEntry entry) async {
-    final key = keyFor(
+    final normalizedEntry = DanmakuCacheEntry(
       sourceId: entry.sourceId,
       baseUrl: entry.baseUrl,
-      videoIdentity: entry.videoKey,
+      videoKey: normalizeDanmakuIdentityKey(entry.videoKey),
+      fileName: entry.fileName,
+      animeId: entry.animeId,
+      episodeId: entry.episodeId,
+      fetchedAtMs: entry.fetchedAtMs,
+      videoDurationSeconds: entry.videoDurationSeconds,
+      appliedShiftSeconds: entry.appliedShiftSeconds,
+      comments: entry.comments,
+    );
+    final key = keyFor(
+      sourceId: normalizedEntry.sourceId,
+      baseUrl: normalizedEntry.baseUrl,
+      videoIdentity: normalizedEntry.videoKey,
     );
     final path = _filePath(key);
     if (_useQuota) {
       if (await CacheQuotaManager.instance.write(
         File(path),
-        utf8.encode(jsonEncode(entry.toJson())),
+        utf8.encode(jsonEncode(normalizedEntry.toJson())),
       )) {
-        _memory[key] = entry;
+        _memory[key] = normalizedEntry;
       }
       return;
     }
@@ -231,7 +267,7 @@ class DanmakuCache {
       await tmp.parent.create(recursive: true);
       final sink = tmp.openWrite();
       try {
-        sink.write(jsonEncode(entry.toJson()));
+        sink.write(jsonEncode(normalizedEntry.toJson()));
         await sink.flush();
       } finally {
         await sink.close();
@@ -239,7 +275,7 @@ class DanmakuCache {
       // rename onto the final name — atomic on POSIX; on Windows, File.rename
       // replaces an existing destination (MOVEFILE_REPLACE_EXISTING).
       await tmp.rename(path);
-      _memory[key] = entry;
+      _memory[key] = normalizedEntry;
     } on FileSystemException catch (e) {
       _log('cache write failed: ${e.message}');
       // Best effort cleanup of the temp file; never surface to callers.
@@ -262,10 +298,18 @@ class DanmakuCache {
       baseUrl: baseUrl,
       videoIdentity: videoIdentity,
     );
+    final legacyKey = _legacyKeyFor(
+      sourceId: sourceId,
+      baseUrl: baseUrl,
+      videoIdentity: videoIdentity,
+    );
     _memory.remove(key);
+    _memory.remove(legacyKey);
     try {
-      final file = File(_filePath(key));
-      if (await file.exists()) await file.delete();
+      for (final candidateKey in <String>{key, legacyKey}) {
+        final file = File(_filePath(candidateKey));
+        if (await file.exists()) await file.delete();
+      }
     } on FileSystemException catch (e) {
       _log('cache remove failed: ${e.message}');
     }

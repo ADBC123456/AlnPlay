@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../scraper/scrape_state.dart';
+import '../identity/video_identity.dart';
 
 /// A durable association between one playable file and one remote danmaku
 /// episode. Bindings are deliberately independent from the comment cache:
@@ -83,9 +84,8 @@ class DanmakuBindingStore {
   }) async {
     await _writeTail;
     final root = await _readRoot();
-    final raw = _sourceBucket(root, sourceId, sourceBaseUrl)[videoIdentity];
-    if (raw is! Map) return null;
-    return DanmakuBinding.fromJson(Map<String, dynamic>.from(raw));
+    final bucket = _sourceBucket(root, sourceId, sourceBaseUrl);
+    return _bestBinding(bucket, videoIdentity);
   }
 
   static Future<Map<String, DanmakuBinding>> loadForScope(
@@ -95,17 +95,32 @@ class DanmakuBindingStore {
     await _writeTail;
     final root = await _readRoot();
     final bucket = _sourceBucket(root, scope.sourceId, scope.sourceBaseUrl);
-    final filter = videoIdentities?.toSet();
+    final requested = videoIdentities?.toList(growable: false);
+    final filter = requested?.map(normalizeDanmakuIdentityKey).toSet();
     final result = <String, DanmakuBinding>{};
     for (final entry in bucket.entries) {
-      if (filter != null && !filter.contains(entry.key)) continue;
       if (entry.value is! Map) continue;
       final binding = DanmakuBinding.fromJson(
         Map<String, dynamic>.from(entry.value as Map),
       );
-      if (binding != null) result[entry.key] = binding;
+      if (binding == null) continue;
+      final key = normalizeDanmakuIdentityKey(entry.key);
+      if (filter != null && !filter.contains(key)) continue;
+      final previous = result[key];
+      if (previous == null || _prefer(binding, previous)) result[key] = binding;
     }
-    return result;
+    if (requested == null) {
+      return <String, DanmakuBinding>{
+        for (final entry in result.entries)
+          legacyDanmakuIdentityKey(entry.key): entry.value,
+      };
+    }
+    final requestedResult = <String, DanmakuBinding>{};
+    for (final original in requested) {
+      final binding = result[normalizeDanmakuIdentityKey(original)];
+      if (binding != null) requestedResult[original] = binding;
+    }
+    return requestedResult;
   }
 
   static Future<void> save(
@@ -128,7 +143,12 @@ class DanmakuBindingStore {
       final rawBucket = sources[sourceKey];
       if (rawBucket is! Map) return;
       final bucket = Map<String, dynamic>.from(rawBucket);
-      if (bucket.remove(videoIdentity) == null) return;
+      final canonical = normalizeDanmakuIdentityKey(videoIdentity);
+      final legacy = legacyDanmakuIdentityKey(videoIdentity);
+      final removedCanonical = bucket.remove(canonical) != null;
+      final removedLegacy = bucket.remove(legacy) != null;
+      final changed = removedCanonical || removedLegacy;
+      if (!changed) return;
       sources[sourceKey] = bucket;
       root['sources'] = sources;
       await prefs.setString(_prefsKey, jsonEncode(root));
@@ -153,14 +173,25 @@ class DanmakuBindingStore {
           ? Map<String, dynamic>.from(sources[sourceKey] as Map)
           : <String, dynamic>{};
       for (final key in replaceVideoIdentities) {
-        bucket.remove(key);
+        bucket.remove(normalizeDanmakuIdentityKey(key));
+        bucket.remove(legacyDanmakuIdentityKey(key));
       }
       final now = DateTime.now().millisecondsSinceEpoch;
       for (final entry in bindings.entries) {
-        bucket[entry.key] = DanmakuBinding(
+        final key = normalizeDanmakuIdentityKey(entry.key);
+        final legacy = legacyDanmakuIdentityKey(entry.key);
+        final existing = _bestBinding(bucket, key);
+        // An automatic refresh must never replace an explicit user choice.
+        if (!manual && existing?.manual == true) {
+          bucket.remove(legacy);
+          bucket[key] = existing!.toJson();
+          continue;
+        }
+        bucket.remove(legacy);
+        bucket[key] = DanmakuBinding(
           sourceId: scope.sourceId,
           sourceBaseUrl: _normalizeBaseUrl(scope.sourceBaseUrl),
-          videoIdentity: entry.key,
+          videoIdentity: key,
           ref: entry.value,
           updatedAtMs: now,
           manual: manual,
@@ -227,4 +258,40 @@ class DanmakuBindingStore {
 
   static String _normalizeBaseUrl(String value) =>
       value.trim().replaceFirst(RegExp(r'/+$'), '');
+
+  static DanmakuBinding? _bestBinding(
+    Map<String, dynamic> bucket,
+    String videoIdentity,
+  ) {
+    final canonical = normalizeDanmakuIdentityKey(videoIdentity);
+    final candidates = <DanmakuBinding>[];
+    for (final key in <String>{
+      canonical,
+      legacyDanmakuIdentityKey(canonical),
+    }) {
+      final raw = bucket[key];
+      if (raw is! Map) continue;
+      final binding = DanmakuBinding.fromJson(Map<String, dynamic>.from(raw));
+      if (binding != null) candidates.add(binding);
+    }
+    if (candidates.isEmpty) return null;
+    candidates.sort((a, b) {
+      if (a.manual != b.manual) return a.manual ? -1 : 1;
+      return b.updatedAtMs.compareTo(a.updatedAtMs);
+    });
+    final selected = candidates.first;
+    return DanmakuBinding(
+      sourceId: selected.sourceId,
+      sourceBaseUrl: selected.sourceBaseUrl,
+      videoIdentity: canonical,
+      ref: selected.ref,
+      updatedAtMs: selected.updatedAtMs,
+      manual: selected.manual,
+    );
+  }
+
+  static bool _prefer(DanmakuBinding candidate, DanmakuBinding current) {
+    if (candidate.manual != current.manual) return candidate.manual;
+    return candidate.updatedAtMs > current.updatedAtMs;
+  }
 }

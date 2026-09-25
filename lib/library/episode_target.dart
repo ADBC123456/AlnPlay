@@ -39,7 +39,20 @@ EpisodeTarget? resolveEpisodeTarget({
   LibraryEpisode? episodeFor(ContinueWatchingEntry entry) {
     final key = ContinueWatchingStore.keyFor(entry.video);
     final file = files.where((file) => file.legacyResumeKey == key).firstOrNull;
-    if (file?.episodeId != null) return snapshot.episodes[file!.episodeId];
+    if (file?.episodeId != null) {
+      final exact = snapshot.episodes[file!.episodeId];
+      if (exact != null) return exact;
+    }
+    if (file != null) {
+      final reconciled = episodes
+          .where(
+            (episode) => snapshot
+                .versionsForEpisode(episode.id)
+                .any((version) => version.id == file.id),
+          )
+          .firstOrNull;
+      if (reconciled != null) return reconciled;
+    }
     final metadata = entry.video.metadataContext;
     if (metadata?.titleId != titleId || metadata?.episodeNumber == null) {
       return null;

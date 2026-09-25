@@ -17,6 +17,7 @@ class UnifiedLibraryService extends ChangeNotifier {
 
   static final UnifiedLibraryService instance = UnifiedLibraryService._();
   static const Duration staleAfter = Duration(minutes: 30);
+  static const Duration automaticFailureCooldown = Duration(minutes: 5);
   static const String _scanTimesKey = 'dreamplayer.libraryScanTimes';
 
   final JsonLibraryRepository repository = JsonLibraryRepository();
@@ -31,6 +32,8 @@ class UnifiedLibraryService extends ChangeNotifier {
   Future<void>? _clearing;
   int _revision = 0;
   final Map<String, LibraryFolder> _queuedFolders = {};
+  final Set<String> _activeFolderIds = {};
+  final Map<String, DateTime> _automaticRetryAfter = {};
 
   Future<void> initialize() => _initializing ??= _initialize();
 
@@ -59,6 +62,8 @@ class UnifiedLibraryService extends ChangeNotifier {
     final now = DateTime.now();
     final staleIds = folders
         .where((folder) {
+          final retryAfter = _automaticRetryAfter[folder.id];
+          if (retryAfter != null && now.isBefore(retryAfter)) return false;
           final ms = times[folder.id];
           return ms == null ||
               now.difference(DateTime.fromMillisecondsSinceEpoch(ms)) >=
@@ -67,14 +72,23 @@ class UnifiedLibraryService extends ChangeNotifier {
         .map((folder) => folder.id)
         .toSet();
     if (staleIds.isEmpty || revision != _revision) return;
-    await refresh(
+    await _enqueueRefresh(
       folders.where((folder) => staleIds.contains(folder.id)).toList(),
+      manual: false,
     );
   }
 
-  Future<void> refresh(List<LibraryFolder> folders) {
+  Future<void> refresh(List<LibraryFolder> folders) =>
+      _enqueueRefresh(folders, manual: true);
+
+  Future<void> _enqueueRefresh(
+    List<LibraryFolder> folders, {
+    required bool manual,
+  }) {
     if (_clearing != null) return Future.value();
     for (final folder in folders) {
+      if (manual) _automaticRetryAfter.remove(folder.id);
+      if (_activeFolderIds.contains(folder.id)) continue;
       _queuedFolders[folder.id] = folder;
     }
     final running = _refreshing;
@@ -98,27 +112,38 @@ class UnifiedLibraryService extends ChangeNotifier {
     final revision = _revision;
     await initialize();
     if (folders.isEmpty || revision != _revision || _clearing != null) return;
-    final bundle = await LibraryAdapterBundle.fromFolders(folders);
-    if (_clearing != null || revision != _revision) return;
-    _adapters = {
-      ..._adapters,
-      for (final adapter in bundle.adapters) adapter.sourceId: adapter,
-    };
-    await _progressSubscription?.cancel();
-    final scanner = CoordinatedLibraryScanner(
-      repository: repository,
-      adapters: bundle.adapters,
-      metadataResolver: TmdbLibraryMetadataResolver(repository: repository),
-    );
-    _scanner = scanner;
-    _progressSubscription = scanner.progress.listen((progress) {
-      progressByRoot = {...progressByRoot, progress.rootId: progress};
-      notifyListeners();
-      if (progress.state == ScanState.complete) {
-        unawaited(_recordSuccessfulScan(progress.rootId));
-      }
-    });
-    await scanner.refreshRoots(bundle.roots);
+    _activeFolderIds.addAll(folders.map((folder) => folder.id));
+    try {
+      final bundle = await LibraryAdapterBundle.fromFolders(folders);
+      if (_clearing != null || revision != _revision) return;
+      _adapters = {
+        ..._adapters,
+        for (final adapter in bundle.adapters) adapter.sourceId: adapter,
+      };
+      await _progressSubscription?.cancel();
+      final scanner = CoordinatedLibraryScanner(
+        repository: repository,
+        adapters: bundle.adapters,
+        metadataResolver: TmdbLibraryMetadataResolver(repository: repository),
+      );
+      _scanner = scanner;
+      _progressSubscription = scanner.progress.listen((progress) {
+        progressByRoot = {...progressByRoot, progress.rootId: progress};
+        notifyListeners();
+        if (progress.state == ScanState.complete) {
+          _automaticRetryAfter.remove(progress.rootId);
+          unawaited(_recordSuccessfulScan(progress.rootId));
+        } else if (progress.state == ScanState.failed ||
+            progress.state == ScanState.partial) {
+          _automaticRetryAfter[progress.rootId] = DateTime.now().add(
+            automaticFailureCooldown,
+          );
+        }
+      });
+      await scanner.refreshRoots(bundle.roots);
+    } finally {
+      _activeFolderIds.removeAll(folders.map((folder) => folder.id));
+    }
   }
 
   void cancel(String rootId) => _scanner?.cancel(rootId);
@@ -128,6 +153,8 @@ class UnifiedLibraryService extends ChangeNotifier {
     if (pending != null) return pending;
     _revision++;
     _queuedFolders.clear();
+    _activeFolderIds.clear();
+    _automaticRetryAfter.clear();
     final operation = _clearLibrary();
     _clearing = operation;
     return operation.whenComplete(() => _clearing = null);

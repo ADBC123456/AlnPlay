@@ -817,11 +817,10 @@ class _PlayerScreenState extends State<PlayerScreen>
       }
       return false;
     }
-    // A saved episode binding is cache-first. Wait for that lookup/fetch before
-    // opening the autoplaying backend so the first frame already has its
-    // matching danmaku timeline. Failure is contained by the loader and never
-    // prevents the video from opening.
-    await _loadDanmakuForVideo(video);
+    // Video preparation and danmaku loading are independent. The generation
+    // guard in the loader prevents a late result from a previous episode from
+    // replacing the current timeline.
+    unawaited(_loadDanmakuForVideo(video));
     // "Watch from beginning" clears the saved position so the details screen
     // stops showing the resume button for this engine.
     if (widget.startFromBeginning) {
@@ -1029,7 +1028,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _current = await refreshStrmPlayback(_current);
       }
       if (!mounted) return;
-      await _loadDanmakuForVideo(_current);
+      unawaited(_loadDanmakuForVideo(_current));
       final subs = await _resolveExternalSubtitles(_current);
       if (subs.isNotEmpty) _current = _current.withExternalSubtitles(subs);
       Duration? resume;
@@ -1248,7 +1247,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       _duration = Duration.zero;
       _buffered = Duration.zero;
       _buffering = true;
-      await _loadDanmakuForVideo(video);
+      unawaited(_loadDanmakuForVideo(video));
       if (!mounted) return;
       setState(() {});
       // The previous mpv media was stopped before changing identity. New

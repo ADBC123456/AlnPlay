@@ -314,34 +314,6 @@ class _WebDavScreenState extends State<WebDavScreen> {
     }
   }
 
-  Future<void> _bookmarkCurrentFolder() async {
-    final server = _browsing;
-    if (server == null || _atBrowseRoot) return;
-    final cleanPath = _path.replaceAll(RegExp(r'/+$'), '');
-    final folderName = cleanPath.split('/').last;
-    final id = 'webdav_${server.id}_${cleanPath.hashCode}';
-    final folder = LibraryFolder(
-      id: id,
-      name: folderName,
-      path: 'webdav:${server.id}$cleanPath',
-      addedAt: DateTime.now(),
-      source: LibraryFolderSource.webdav,
-      networkServerId: server.id,
-      networkPath: cleanPath,
-      networkLabel: server.name,
-    );
-    await LibraryFoldersStore.add(folder);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: AppText(
-            'Bookmarked $folderName to Home (WebDAV · ${server.name})',
-          ),
-        ),
-      );
-    }
-  }
-
   void _addServer() => _showServerDialog();
 
   void _editServer(WebDavServer server) => _showServerDialog(existing: server);
@@ -385,12 +357,6 @@ class _WebDavScreenState extends State<WebDavScreen> {
               child: AppText(
                 _identifying ? '正在识别…' : '自动识别 (${_selectedPaths.length})',
               ),
-            ),
-          if (browsing != null && !_atBrowseRoot)
-            IconButton(
-              tooltip: context.tr('Bookmark this folder to Home'),
-              icon: const Icon(Icons.bookmark_add_outlined),
-              onPressed: _bookmarkCurrentFolder,
             ),
           if (browsing != null)
             IconButton(
